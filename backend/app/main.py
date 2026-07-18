@@ -1,8 +1,9 @@
 import os
 import re
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
@@ -62,3 +63,30 @@ app.mount("/api/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uplo
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "MyPlacement.AI"}
+
+
+# Serve the built React SPA in production. The Docker build compiles the frontend
+# and copies it to ./static; when that directory is present we serve its hashed
+# assets and fall back to index.html for every non-API route so client-side
+# routing (deep links, page refresh) works. In local dev the directory is absent
+# and Vite serves the frontend via its own proxy, so this block is a no-op.
+_STATIC_DIR = "static"
+if os.path.isdir(_STATIC_DIR):
+    app.mount(
+        "/assets",
+        StaticFiles(directory=os.path.join(_STATIC_DIR, "assets")),
+        name="assets",
+    )
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        # Never let the SPA fallback mask the API: an unmatched /api path here
+        # means a genuine 404, not an index.html page.
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404)
+        # Serve a real static file when one matches (e.g. favicon); otherwise
+        # return index.html and let React Router handle the route.
+        candidate = os.path.join(_STATIC_DIR, full_path)
+        if full_path and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_STATIC_DIR, "index.html"))

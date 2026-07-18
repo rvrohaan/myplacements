@@ -1,0 +1,12 @@
+# Keep the build context small and avoid copying host-built artifacts.
+**/node_modules
+**/venv
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.git
+.gitignore
+frontend/dist
+backend/uploads
+*.docx
