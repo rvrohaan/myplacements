@@ -6,6 +6,10 @@
 // Hosts that never carry a tenant subdomain.
 const BARE_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0'])
 
+// Subdomains that never identify a tenant college. 'www' is an alias of the
+// apex marketing site, so it resolves to no tenant (like the bare apex).
+const NON_TENANT_SUBDOMAINS = new Set(['www'])
+
 // Reserved subdomain for the platform console (admin.myplacements.in), where
 // super_admins sign in. Not a college.
 export const ADMIN_SUBDOMAIN = 'admin'
@@ -22,13 +26,15 @@ export function getSubdomain(host: string = window.location.hostname): string | 
 
   const parts = h.split('.')
   // rit.localhost -> ["rit", "localhost"]; rit.myplacements.in -> ["rit", ...]
+  let sub: string | null = null
   if (h.endsWith('.localhost')) {
-    return parts[0] || null
+    sub = parts[0] || null
+  } else if (parts.length >= 3) {
+    // Apex (myplacements.in) has no tenant; a real subdomain has an extra label.
+    // Anything with 3+ labels (rit.myplacements.in) takes the leftmost as tenant.
+    sub = parts[0] || null
   }
-  // Apex (myplacements.in) has no tenant; a real subdomain has an extra label.
-  // Anything with 3+ labels (rit.myplacements.in) takes the leftmost as tenant.
-  if (parts.length >= 3) {
-    return parts[0] || null
-  }
-  return null
+  // 'www' is the marketing site, not a college tenant.
+  if (sub && NON_TENANT_SUBDOMAINS.has(sub)) return null
+  return sub
 }

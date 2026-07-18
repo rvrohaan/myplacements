@@ -18,6 +18,10 @@ from app.models.college import College
 # Hosts that never carry a tenant subdomain (apex/local bare hosts).
 _BARE_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 
+# Reserved subdomains that never identify a tenant college. 'www' is an alias of
+# the apex marketing site, so it resolves to no tenant (like the bare apex).
+_NON_TENANT_SUBDOMAINS = {"www"}
+
 
 def extract_subdomain(host: str | None) -> str | None:
     """Return the tenant slug from a Host value, or None if there isn't one.
@@ -54,8 +58,13 @@ def resolve_subdomain(request: Request) -> str | None:
     """Tenant slug for this request: explicit X-Tenant header wins, else Host."""
     explicit = request.headers.get("x-tenant")
     if explicit:
-        return explicit.strip().lower() or None
-    return extract_subdomain(request.headers.get("host"))
+        slug = explicit.strip().lower() or None
+    else:
+        slug = extract_subdomain(request.headers.get("host"))
+    # 'www' (and other reserved labels) map to the marketing site, not a tenant.
+    if slug in _NON_TENANT_SUBDOMAINS:
+        return None
+    return slug
 
 
 def is_admin_host(request: Request) -> bool:
