@@ -5,6 +5,8 @@ import api from '@/lib/api'
 interface ImportResult {
   created: number
   skipped: number
+  // Companies only: HR contacts attached from the hr_* columns.
+  hr_contacts?: number
   errors: { row: number; errors: string[] }[]
 }
 
@@ -77,6 +79,7 @@ export default function ImportExportControls({
         setResult(r.data)
       } else {
         const parts = [`${r.data.created} added`]
+        if (r.data.hr_contacts) parts.push(`${r.data.hr_contacts} HR contacts`)
         if (r.data.skipped > 0) parts.push(`${r.data.skipped} skipped`)
         showToast(parts.join(' · '))
       }
@@ -159,6 +162,7 @@ export default function ImportExportControls({
           <p className="font-medium text-gray-800">Import complete</p>
           <p className="mt-0.5">
             <span className="text-green-700">{result.created} added</span>
+            {!!result.hr_contacts && <span className="text-green-700"> · {result.hr_contacts} HR contacts</span>}
             {result.skipped > 0 && <span className="text-gray-500"> · {result.skipped} skipped (duplicates)</span>}
             {result.errors.length > 0 && <span className="text-red-600"> · {result.errors.length} with errors</span>}
           </p>

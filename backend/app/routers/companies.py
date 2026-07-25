@@ -68,6 +68,30 @@ COMPANY_COLUMNS = [
     Column("notes", "notes"),
 ]
 
+# Extra import-only columns: one spreadsheet row carries a company plus (optionally)
+# one of its HR contacts. Repeat the company name across rows to attach several
+# contacts to it. Attrs are prefixed so they can't collide with a Company field
+# (both models have a "name"); the prefix is stripped when the contact is built.
+HR_CONTACT_COLUMNS = [
+    Column("hr_name", "hr_name"),
+    Column("hr_designation", "hr_designation"),
+    Column("hr_email", "hr_email"),
+    Column("hr_mobile", "hr_mobile"),
+    Column("hr_linkedin", "hr_linkedin"),
+    Column("hr_region", "hr_region"),
+]
+
+# Export stays company-only; import and its template also accept the HR columns.
+IMPORT_COLUMNS = COMPANY_COLUMNS + HR_CONTACT_COLUMNS
+
+
+def _hr_contact_key(name: Optional[str], email: Optional[str]) -> str:
+    """Identity of an HR contact within one company. Email wins when present, so
+    the same person listed in two source files is only imported once."""
+    if email:
+        return f"email:{email.strip().lower()}"
+    return f"name:{(name or '').strip().lower()}"
+
 
 @router.get("", response_model=list[CompanyOut])
 def list_companies(
@@ -170,7 +194,7 @@ def _companies_workbook_response(companies: list[Company]) -> StreamingResponse:
 @router.get("/import-template")
 def company_import_template(_: User = Depends(get_current_user)):
     """Download a header-only workbook to fill in for bulk import."""
-    columns = [c for c in COMPANY_COLUMNS if c.importable]
+    columns = [c for c in IMPORT_COLUMNS if c.importable]
     buffer = build_workbook(columns, [], "Companies")
     return StreamingResponse(
         buffer,
@@ -186,37 +210,72 @@ def import_companies(
     current_user: User = Depends(require_roles(*MANAGE_ROLES)),
 ):
     """Bulk-create companies from an uploaded .xlsx. Existing names are skipped.
+
+    A row may also carry one HR contact (the ``hr_*`` columns). Repeating a company
+    name across rows attaches several contacts to that one company rather than
+    creating duplicates, so a contact list exports straight into the app.
     Bulk import is a management task; officers add leads one at a time instead."""
     try:
-        rows = parse_rows(file.file.read(), COMPANY_COLUMNS)
+        rows = parse_rows(file.file.read(), IMPORT_COLUMNS)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     created = 0
     skipped = 0
+    contacts_created = 0
     errors: list[dict] = []
-    seen_names: set[str] = set()
+    # name key -> Company, so later rows for the same company reuse it.
+    seen: dict[str, Company] = {}
+    # name key -> the contact keys already on that company, to skip repeats.
+    contact_keys: dict[str, set[str]] = {}
 
     for entry in rows:
         if entry["errors"]:
             errors.append({"row": entry["row"], "errors": entry["errors"]})
             continue
-        data = entry["data"]
-        name_key = data["name"].lower()
-        existing = (
-            db.query(Company)
-            .filter(Company.name == data["name"], Company.college_id == current_user.college_id)
-            .first()
-        )
-        if name_key in seen_names or existing:
-            skipped += 1
+        data = dict(entry["data"])
+        if not data.get("name"):
+            errors.append({"row": entry["row"], "errors": ["name is required"]})
             continue
-        seen_names.add(name_key)
-        db.add(Company(**data, college_id=current_user.college_id))
-        created += 1
+        hr = {k[len("hr_"):]: data.pop(k) for k in list(data) if k.startswith("hr_")}
+        name_key = data["name"].lower()
+
+        company = seen.get(name_key)
+        if company is None:
+            company = (
+                db.query(Company)
+                .filter(Company.name == data["name"], Company.college_id == current_user.college_id)
+                .first()
+            )
+            if company:
+                skipped += 1
+                contact_keys[name_key] = {
+                    _hr_contact_key(c.name, c.email) for c in company.hr_contacts
+                }
+            else:
+                company = Company(**data, college_id=current_user.college_id)
+                db.add(company)
+                db.flush()  # assign an id so contacts on this same row can attach
+                created += 1
+                contact_keys[name_key] = set()
+            seen[name_key] = company
+
+        if hr.get("name") or hr.get("email"):
+            key = _hr_contact_key(hr.get("name"), hr.get("email"))
+            if key not in contact_keys[name_key]:
+                contact_keys[name_key].add(key)
+                # name is required on the contact; fall back to the email local part.
+                hr["name"] = hr.get("name") or hr["email"].split("@")[0]
+                db.add(HRContact(**hr, company_id=company.id))
+                contacts_created += 1
 
     db.commit()
-    return {"created": created, "skipped": skipped, "errors": errors}
+    return {
+        "created": created,
+        "skipped": skipped,
+        "hr_contacts": contacts_created,
+        "errors": errors,
+    }
 
 
 @router.get("/{company_id}", response_model=CompanyOut)
