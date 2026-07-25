@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Search, UserPlus, Sparkles, ChevronLeft, ChevronRight, Pencil, KeyRound, Check } from 'lucide-react'
 import api from '@/lib/api'
 import type { Student, PlacementStatus, RiskCategory, EnableLoginResult } from '@/types'
@@ -28,6 +28,8 @@ const RISK_OPTIONS: StatusOption<RiskCategory>[] = [
 export default function Students() {
   const toast = useToast()
   const [students, setStudents] = useState<Student[]>([])
+  // What's typed vs. what's been sent to the server (debounced, see below).
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<PlacementStatus | ''>('')
   const [riskFilter, setRiskFilter] = useState<RiskCategory | ''>('')
@@ -40,35 +42,52 @@ export default function Students() {
   const [enablingId, setEnablingId] = useState<number | null>(null)
   const [enablingAll, setEnablingAll] = useState(false)
   const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
 
   const PAGE_SIZE = 25
 
+  // Searching hits the server, so wait for a pause in typing instead of firing a
+  // query per keystroke. Filters change the result set, so restart at page one.
+  useEffect(() => {
+    const timer = setTimeout(() => { setSearch(searchInput); setPage(1) }, 300)
+    return () => clearTimeout(timer)
+  }, [searchInput])
+
+  // Responses can land out of order (an early, slower query resolving after a
+  // later one); only the newest request is allowed to write to state.
+  const latestRequest = useRef(0)
+
+  // Paged server-side: a college can have far more students than one request
+  // returns. X-Total-Count carries the unpaged total.
   const loadStudents = () => {
+    const requestId = ++latestRequest.current
     setLoading(true)
-    const params: Record<string, string> = { limit: '200' }
+    const params: Record<string, string> = {
+      skip: String((page - 1) * PAGE_SIZE),
+      limit: String(PAGE_SIZE),
+    }
+    if (search) params.search = search
     if (statusFilter) params.placement_status = statusFilter
     if (riskFilter) params.risk_category = riskFilter
     api
       .get('/students', { params })
-      .then((r) => setStudents(r.data))
-      .catch(() => toast.error('Could not load students. Please refresh.'))
-      .finally(() => setLoading(false))
+      .then((r) => {
+        if (requestId !== latestRequest.current) return
+        setStudents(r.data)
+        const count = Number(r.headers['x-total-count'])
+        setTotal(Number.isFinite(count) ? count : r.data.length)
+      })
+      .catch(() => {
+        if (requestId === latestRequest.current) toast.error('Could not load students. Please refresh.')
+      })
+      .finally(() => {
+        if (requestId === latestRequest.current) setLoading(false)
+      })
   }
 
-  useEffect(loadStudents, [statusFilter, riskFilter])
+  useEffect(loadStudents, [search, statusFilter, riskFilter, page])
 
-  const filtered = students.filter((s) =>
-    !search ||
-    s.roll_number.toLowerCase().includes(search.toLowerCase()) ||
-    s.branch.toLowerCase().includes(search.toLowerCase()) ||
-    (s.full_name?.toLowerCase().includes(search.toLowerCase()) ?? false)
-  )
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  // Reset to (or clamp into) a valid page whenever the filtered set changes.
-  useEffect(() => setPage(1), [search, statusFilter, riskFilter])
-  const currentPage = Math.min(page, totalPages)
-  const paged = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   const markEnabled = (ids: number[]) => {
     const idSet = new Set(ids)
@@ -88,8 +107,10 @@ export default function Students() {
     }
   }
 
+  // Acts on the students actually on screen — with server-side paging that's the
+  // current page, so a click can't fan out over an entire college.
   const enableAllShown = async () => {
-    const ids = filtered.filter((s) => !s.login_enabled).map((s) => s.id)
+    const ids = students.filter((s) => !s.login_enabled).map((s) => s.id)
     if (ids.length === 0) return
     setEnablingAll(true)
     try {
@@ -129,15 +150,15 @@ export default function Students() {
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search by name, roll no or branch..."
             className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
           />
         </div>
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as PlacementStatus | '')}
+          onChange={(e) => { setStatusFilter(e.target.value as PlacementStatus | ''); setPage(1) }}
           className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
         >
           <option value="">All Status</option>
@@ -148,7 +169,7 @@ export default function Students() {
         </select>
         <select
           value={riskFilter}
-          onChange={(e) => setRiskFilter(e.target.value as RiskCategory | '')}
+          onChange={(e) => { setRiskFilter(e.target.value as RiskCategory | ''); setPage(1) }}
           className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
         >
           <option value="">All Risk</option>
@@ -162,14 +183,15 @@ export default function Students() {
             label="Students"
             onImported={loadStudents}
             exportParams={{
+              ...(search ? { search } : {}),
               ...(statusFilter ? { placement_status: statusFilter } : {}),
               ...(riskFilter ? { risk_category: riskFilter } : {}),
             }}
           />
           <button
             onClick={enableAllShown}
-            disabled={enablingAll || filtered.every((s) => s.login_enabled)}
-            title="Enable login for all students in the current view that don't have it yet"
+            disabled={enablingAll || students.every((s) => s.login_enabled)}
+            title="Enable login for the students on this page that don't have it yet"
             className="flex items-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
           >
             <KeyRound className="w-4 h-4" />
@@ -197,10 +219,10 @@ export default function Students() {
           <tbody className="divide-y divide-gray-100">
             {loading ? (
               <tr><td colSpan={11} className="text-center py-10 text-gray-500">Loading...</td></tr>
-            ) : filtered.length === 0 ? (
+            ) : students.length === 0 ? (
               <tr><td colSpan={11} className="text-center py-10 text-gray-500">No students found</td></tr>
             ) : (
-              paged.map((s) => (
+              students.map((s) => (
                 <tr key={s.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-900">{s.full_name || '—'}</td>
                   <td className="px-4 py-3 text-gray-700">{s.roll_number}</td>
@@ -285,24 +307,24 @@ export default function Students() {
         </table>
       </div>
 
-      {!loading && filtered.length > 0 && (
+      {!loading && total > 0 && (
         <div className="flex items-center justify-between text-sm text-gray-600">
           <span>
-            Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length}
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min((page - 1) * PAGE_SIZE + students.length, total)} of {total}
           </span>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage <= 1}
+              disabled={page <= 1}
               className="flex items-center gap-1 border border-gray-300 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <ChevronLeft className="w-4 h-4" />
               Prev
             </button>
-            <span className="text-gray-500">Page {currentPage} of {totalPages}</span>
+            <span className="text-gray-500">Page {page} of {totalPages}</span>
             <button
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage >= totalPages}
+              disabled={page >= totalPages}
               className="flex items-center gap-1 border border-gray-300 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Next

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { ArrowLeft, CalendarDays, MapPin, IndianRupee, Users, FileText, Pencil, CheckCircle, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import api from '@/lib/api'
+import fetchAll from '@/lib/fetchAll'
 import type { Drive, DriveRound, Participant, ParticipantStatus, Company } from '@/types'
 import { cn, STATUS_COLORS, formatDate, formatCTC } from '@/lib/utils'
 import OfferPackageModal from './OfferPackageModal'
@@ -52,7 +53,7 @@ export default function DriveDetail() {
 
   // Companies list backs the (read-only) company field in the edit modal.
   useEffect(() => {
-    api.get('/companies', { params: { limit: 200 } }).then((r) => setCompanies(r.data)).catch(() => {})
+    fetchAll<Company>('/companies').then(setCompanies).catch(() => {})
   }, [])
 
   const setRounds = (rounds: DriveRound[]) => setDrive((prev) => (prev ? { ...prev, rounds } : prev))

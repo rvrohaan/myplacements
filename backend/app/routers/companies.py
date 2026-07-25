@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -85,6 +85,18 @@ HR_CONTACT_COLUMNS = [
 IMPORT_COLUMNS = COMPANY_COLUMNS + HR_CONTACT_COLUMNS
 
 
+def _search_filter(search: str):
+    """Match the free-text box against every column the list actually shows, so
+    searching a sector or a city finds companies the way users expect."""
+    like = f"%{search}%"
+    return (
+        Company.name.ilike(like)
+        | Company.sector.ilike(like)
+        | Company.domain.ilike(like)
+        | Company.location.ilike(like)
+    )
+
+
 def _hr_contact_key(name: Optional[str], email: Optional[str]) -> str:
     """Identity of an HR contact within one company. Email wins when present, so
     the same person listed in two source files is only imported once."""
@@ -95,6 +107,7 @@ def _hr_contact_key(name: Optional[str], email: Optional[str]) -> str:
 
 @router.get("", response_model=list[CompanyOut])
 def list_companies(
+    response: Response,
     status: Optional[CompanyStatus] = None,
     sector: Optional[str] = None,
     search: Optional[str] = None,
@@ -104,6 +117,9 @@ def list_companies(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """One page of companies. The total row count for the current filters is
+    returned in the ``X-Total-Count`` header so callers can paginate without the
+    response body shape changing."""
     q = db.query(Company)
     if current_user.college_id:
         q = q.filter(Company.college_id == current_user.college_id)
@@ -111,6 +127,7 @@ def list_companies(
     if current_user.role == UserRole.PLACEMENT_OFFICER:
         ids = _officer_company_ids(db, current_user)
         if not ids:
+            response.headers["X-Total-Count"] = "0"
             return []
         q = q.filter(Company.id.in_(ids))
     # Allocatable companies only — drives the manual "assign a company" picker:
@@ -126,7 +143,8 @@ def list_companies(
     if sector:
         q = q.filter(Company.sector.ilike(f"%{sector}%"))
     if search:
-        q = q.filter(Company.name.ilike(f"%{search}%"))
+        q = q.filter(_search_filter(search))
+    response.headers["X-Total-Count"] = str(q.count())
     return q.offset(skip).limit(limit).all()
 
 
@@ -177,7 +195,7 @@ def export_companies(
     if sector:
         q = q.filter(Company.sector.ilike(f"%{sector}%"))
     if search:
-        q = q.filter(Company.name.ilike(f"%{search}%"))
+        q = q.filter(_search_filter(search))
 
     return _companies_workbook_response(q.all())
 

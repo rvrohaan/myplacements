@@ -1,7 +1,7 @@
 import secrets
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,17 @@ from app.services.excel_io import XLSX_MEDIA_TYPE, Column, build_workbook, parse
 from app.services.student_scoring import assess
 
 router = APIRouter(prefix="/students", tags=["students"])
+
+
+def _apply_search(q, search: str):
+    """Match the free-text box against roll number, branch and the student's name.
+    full_name lives on the backing user account, so it needs a join."""
+    like = f"%{search}%"
+    return q.join(User, Student.user_id == User.id).filter(
+        Student.roll_number.ilike(like)
+        | Student.branch.ilike(like)
+        | User.full_name.ilike(like)
+    )
 
 
 def _backing_email(roll_number: str, college_id: int | None) -> str:
@@ -73,6 +84,7 @@ STUDENT_EXPORT_COLUMNS = STUDENT_IMPORT_COLUMNS + [
 
 @router.get("", response_model=list[StudentOut])
 def list_students(
+    response: Response,
     branch: Optional[str] = None,
     placement_status: Optional[PlacementStatus] = None,
     risk_category: Optional[RiskCategory] = None,
@@ -84,6 +96,8 @@ def list_students(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """One page of students. The total row count for the current filters is
+    returned in the ``X-Total-Count`` header so callers can paginate."""
     q = db.query(Student)
     if current_user.college_id:
         q = q.filter(Student.college_id == current_user.college_id)
@@ -97,6 +111,9 @@ def list_students(
         q = q.filter(Student.cgpa >= min_cgpa)
     if batch_year:
         q = q.filter(Student.batch_year == batch_year)
+    if search:
+        q = _apply_search(q, search)
+    response.headers["X-Total-Count"] = str(q.count())
     return q.offset(skip).limit(limit).all()
 
 
@@ -150,6 +167,7 @@ def export_students(
     risk_category: Optional[RiskCategory] = None,
     min_cgpa: Optional[float] = None,
     batch_year: Optional[int] = None,
+    search: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -167,6 +185,8 @@ def export_students(
         q = q.filter(Student.cgpa >= min_cgpa)
     if batch_year:
         q = q.filter(Student.batch_year == batch_year)
+    if search:
+        q = _apply_search(q, search)
 
     buffer = build_workbook(STUDENT_EXPORT_COLUMNS, q.all(), "Students")
     return StreamingResponse(

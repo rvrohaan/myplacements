@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -17,6 +17,7 @@ ADMIN_ROLES = (UserRole.SUPER_ADMIN, UserRole.PRINCIPAL, UserRole.PRO_CHANCELLOR
 
 @router.get("", response_model=list[UserOut])
 def list_users(
+    response: Response,
     role: Optional[UserRole] = None,
     search: Optional[str] = None,
     skip: int = 0,
@@ -35,6 +36,7 @@ def list_users(
     if search:
         like = f"%{search}%"
         q = q.filter((User.full_name.ilike(like)) | (User.email.ilike(like)))
+    response.headers["X-Total-Count"] = str(q.count())
     return q.order_by(User.created_at.desc()).offset(skip).limit(limit).all()
 
 

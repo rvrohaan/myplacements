@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, GraduationCap, Users, Trophy, Trash2 } from 'lucide-react'
 import api from '@/lib/api'
+import fetchAll from '@/lib/fetchAll'
 import type { TrainingModule, TrainingRecord, Student } from '@/types'
 import { cn, STATUS_COLORS } from '@/lib/utils'
 
@@ -132,7 +133,7 @@ function ProgressPanel({ module, onChanged, onClose }: { module: TrainingModule;
 
   useEffect(() => {
     fetchRecords()
-    api.get('/students', { params: { limit: 500 } }).then((r) => setStudents(r.data)).catch(() => {})
+    fetchAll<Student>('/students').then(setStudents).catch(() => {})
   }, [module.id])
 
   const enrolledIds = new Set(records.map((r) => r.student_id))

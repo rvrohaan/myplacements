@@ -40,6 +40,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Pagination total on list endpoints; custom response headers are hidden from
+    # JS unless explicitly exposed.
+    expose_headers=["X-Total-Count"],
 )
 
 app.include_router(auth.router, prefix="/api")

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Search, ExternalLink, CheckCircle2, XCircle, UserRound, Sparkles } from 'lucide-react'
+import { Plus, Search, ExternalLink, CheckCircle2, XCircle, UserRound, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import type { Company, CompanyStatus, UserRole } from '@/types'
@@ -24,6 +24,8 @@ export default function Companies() {
   const canManage = !!role && MANAGE_ROLES.includes(role)
   const isOfficer = role === 'placement_officer'
   const [companies, setCompanies] = useState<Company[]>([])
+  // What's typed vs. what's been sent to the server (debounced, see below).
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<CompanyStatus | ''>('')
   const [loading, setLoading] = useState(true)
@@ -31,16 +33,51 @@ export default function Companies() {
   const [showAutoAllocate, setShowAutoAllocate] = useState(false)
   const [formData, setFormData] = useState({ name: '', sector: '', domain: '', location: '', website: '', notes: '' })
   const [submitting, setSubmitting] = useState(false)
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
 
+  const PAGE_SIZE = 25
+
+  // Searching hits the server, so wait for a pause in typing instead of firing a
+  // query per keystroke. Filters change the result set, so restart at page one.
+  useEffect(() => {
+    const timer = setTimeout(() => { setSearch(searchInput); setPage(1) }, 300)
+    return () => clearTimeout(timer)
+  }, [searchInput])
+
+  // Responses can land out of order (an early, slower query resolving after a
+  // later one); only the newest request is allowed to write to state.
+  const latestRequest = useRef(0)
+
+  // Paged server-side: the full list can run to hundreds of companies, more than
+  // a single request returns. X-Total-Count carries the unpaged total.
   const fetchCompanies = () => {
+    const requestId = ++latestRequest.current
     setLoading(true)
-    const params: Record<string, string> = {}
+    const params: Record<string, string> = {
+      skip: String((page - 1) * PAGE_SIZE),
+      limit: String(PAGE_SIZE),
+    }
     if (search) params.search = search
     if (status) params.status = status
-    api.get('/companies', { params }).then((r) => setCompanies(r.data)).finally(() => setLoading(false))
+    api
+      .get('/companies', { params })
+      .then((r) => {
+        if (requestId !== latestRequest.current) return
+        setCompanies(r.data)
+        const count = Number(r.headers['x-total-count'])
+        setTotal(Number.isFinite(count) ? count : r.data.length)
+      })
+      .finally(() => {
+        if (requestId === latestRequest.current) setLoading(false)
+      })
   }
 
-  useEffect(() => { fetchCompanies() }, [search, status])
+  useEffect(() => { fetchCompanies() }, [search, status, page])
+
+  const applyStatus = (value: CompanyStatus | '') => { setStatus(value); setPage(1) }
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -72,15 +109,15 @@ export default function Companies() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search companies..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search name, sector, domain or location..."
               className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
           </div>
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value as CompanyStatus | '')}
+            onChange={(e) => applyStatus(e.target.value as CompanyStatus | '')}
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
           >
             {STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -249,6 +286,33 @@ export default function Companies() {
           </tbody>
         </table>
       </div>
+
+      {!loading && total > 0 && (
+        <div className="flex items-center justify-between text-sm text-gray-600">
+          <span>
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min((page - 1) * PAGE_SIZE + companies.length, total)} of {total}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="flex items-center gap-1 border border-gray-300 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              Prev
+            </button>
+            <span className="text-gray-500">Page {page} of {totalPages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="flex items-center gap-1 border border-gray-300 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

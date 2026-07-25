@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Search, UserPlus, CheckCircle2, Copy, Ban, RotateCcw } from 'lucide-react'
 import api from '@/lib/api'
+import fetchAll from '@/lib/fetchAll'
 import type { User, UserRole } from '@/types'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/authStore'
@@ -60,11 +61,12 @@ export default function People() {
   const [showModal, setShowModal] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
 
+  // Load every staff account so the search box below covers all of them, not
+  // just the first page the endpoint returns by default.
   const loadUsers = () => {
     setLoading(true)
-    api
-      .get('/users')
-      .then((r) => setUsers(r.data))
+    fetchAll<User>('/users')
+      .then(setUsers)
       .finally(() => setLoading(false))
   }
 

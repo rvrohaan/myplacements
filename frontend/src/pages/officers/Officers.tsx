@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, UserPlus, Target, Briefcase, MapPin, Trash2, ArrowUpCircle, CheckCircle2 } from 'lucide-react'
 import api from '@/lib/api'
+import fetchAll from '@/lib/fetchAll'
 import { useAuthStore } from '@/store/authStore'
 import type { Officer, Assignment, AssignmentStatus, Company, UserRole } from '@/types'
 import { cn, STATUS_COLORS } from '@/lib/utils'
@@ -207,7 +208,7 @@ function AssignmentPanel({ officer, canManage, onChanged, onClose }: { officer: 
     fetchAssignments()
     // Only unassigned companies are pickable — a company has a single owner, so
     // companies already allocated to another officer must not appear here.
-    api.get('/companies', { params: { limit: 200, unassigned: true } }).then((r) => setCompanies(r.data)).catch(() => {})
+    fetchAll<Company>('/companies', { unassigned: true }).then(setCompanies).catch(() => {})
   }, [officer.id])
 
   // Backend already excludes globally-assigned companies; this also drops any
