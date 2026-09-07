@@ -1,14 +1,59 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Search, ExternalLink, CheckCircle2, XCircle, UserRound, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Search, ExternalLink, CheckCircle2, XCircle, UserRound, Sparkles, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import type { Company, CompanyStatus, UserRole } from '@/types'
-import { cn, STATUS_COLORS } from '@/lib/utils'
+import { cn, formatDate, STATUS_COLORS } from '@/lib/utils'
 import ImportExportControls from '@/components/ImportExportControls'
 import AutoAllocateModal from './AutoAllocateModal'
 
 const MANAGE_ROLES: UserRole[] = ['super_admin', 'principal', 'pro_chancellor', 'deputy_pro_chancellor']
+
+// Sort keys the API accepts; anything else is rejected server-side.
+type SortKey = 'name' | 'sector' | 'location' | 'salary_max' | 'status' | 'created_at'
+type SortOrder = 'asc' | 'desc'
+
+// The table header, and which column each heading sorts by. Text reads best
+// A-Z on first click; money and dates are most useful largest/newest first.
+const COLUMNS: { label: string; sort?: SortKey; firstOrder?: SortOrder }[] = [
+  { label: 'Company', sort: 'name' },
+  { label: 'Sector / Domain', sort: 'sector' },
+  { label: 'Location', sort: 'location' },
+  { label: 'CTC Range', sort: 'salary_max', firstOrder: 'desc' },
+  { label: 'Status', sort: 'status' },
+  { label: 'Added', sort: 'created_at', firstOrder: 'desc' },
+  { label: '' },
+]
+
+type Sorting = { sort: SortKey | 'id'; order: SortOrder }
+
+// A-Z by name: the order people scan a company list in. ('id' - the order rows
+// were added - stays a valid stored value so sessions that chose it still work.)
+const DEFAULT_SORTING: Sorting = { sort: 'name', order: 'asc' }
+const SORT_STORAGE_KEY = 'companies:sorting'
+const SORT_KEYS: (SortKey | 'id')[] = ['id', ...COLUMNS.flatMap((c) => (c.sort ? [c.sort] : []))]
+
+/**
+ * The sort the user last chose, remembered for the browser session so opening a
+ * company and coming back lands on the same ordering. sessionStorage rather than
+ * localStorage: a new tab starts from the default. Anything unreadable or stale
+ * falls back to the default, since an invalid key would make the API 422.
+ */
+function storedSorting(): Sorting {
+  try {
+    const raw = sessionStorage.getItem(SORT_STORAGE_KEY)
+    if (raw) {
+      const saved = JSON.parse(raw) as Sorting
+      if (SORT_KEYS.includes(saved.sort) && (saved.order === 'asc' || saved.order === 'desc')) {
+        return saved
+      }
+    }
+  } catch {
+    // Storage disabled or holding something we didn't write - use the default.
+  }
+  return DEFAULT_SORTING
+}
 
 const STATUS_OPTIONS: { value: CompanyStatus | ''; label: string }[] = [
   { value: '', label: 'All Status' },
@@ -35,6 +80,11 @@ export default function Companies() {
   const [submitting, setSubmitting] = useState(false)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  // Sorting is server-side: a page holds 25 of what can be thousands of
+  // companies, so ordering the rows in the browser would only order the slice
+  // already on screen.
+  const [sorting, setSorting] = useState<Sorting>(storedSorting)
+  const { sort, order } = sorting
 
   const PAGE_SIZE = 25
 
@@ -57,6 +107,8 @@ export default function Companies() {
     const params: Record<string, string> = {
       skip: String((page - 1) * PAGE_SIZE),
       limit: String(PAGE_SIZE),
+      sort,
+      order,
     }
     if (search) params.search = search
     if (status) params.status = status
@@ -73,9 +125,29 @@ export default function Companies() {
       })
   }
 
-  useEffect(() => { fetchCompanies() }, [search, status, page])
+  useEffect(() => { fetchCompanies() }, [search, status, page, sort, order])
 
   const applyStatus = (value: CompanyStatus | '') => { setStatus(value); setPage(1) }
+
+  // Clicking the active column flips direction; a new column starts in its own
+  // most useful direction. Either way the reordered list restarts at page one.
+  const applySort = (key: SortKey, firstOrder: SortOrder = 'asc') => {
+    setSorting((prev) =>
+      prev.sort === key
+        ? { sort: key, order: prev.order === 'asc' ? 'desc' : 'asc' }
+        : { sort: key, order: firstOrder },
+    )
+    setPage(1)
+  }
+
+  // Remember the chosen sort for the rest of the session (see storedSorting).
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sorting))
+    } catch {
+      // Storage unavailable - sorting still works, it just won't be remembered.
+    }
+  }, [sorting])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -129,7 +201,7 @@ export default function Companies() {
             label="Companies"
             onImported={fetchCompanies}
             showImport={canManage}
-            exportParams={{ ...(search ? { search } : {}), ...(status ? { status } : {}) }}
+            exportParams={{ ...(search ? { search } : {}), ...(status ? { status } : {}), sort, order }}
           />
           {canManage && (
             <button
@@ -200,19 +272,46 @@ export default function Companies() {
       )}
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full min-w-[880px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {['Company', 'Sector / Domain', 'Location', 'CTC Range', 'Status', ''].map((h) => (
-                <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-              ))}
+              {COLUMNS.map((col) => {
+                const active = col.sort === sort
+                return (
+                  <th
+                    key={col.label}
+                    aria-sort={active ? (order === 'asc' ? 'ascending' : 'descending') : undefined}
+                    className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide"
+                  >
+                    {col.sort ? (
+                      <button
+                        onClick={() => applySort(col.sort!, col.firstOrder)}
+                        className={cn(
+                          'group flex items-center gap-1 uppercase tracking-wide hover:text-gray-700 transition-colors',
+                          active && 'text-primary-600',
+                        )}
+                        title={`Sort by ${col.label.toLowerCase()}`}
+                      >
+                        {col.label}
+                        {active ? (
+                          order === 'asc' ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronsUpDown className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        )}
+                      </button>
+                    ) : (
+                      col.label
+                    )}
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={6} className="text-center py-10 text-gray-400">Loading...</td></tr>
+              <tr><td colSpan={COLUMNS.length} className="text-center py-10 text-gray-400">Loading...</td></tr>
             ) : companies.length === 0 ? (
-              <tr><td colSpan={6} className="text-center py-10 text-gray-400">No companies found</td></tr>
+              <tr><td colSpan={COLUMNS.length} className="text-center py-10 text-gray-400">No companies found</td></tr>
             ) : (
               companies.map((c) => (
                 <tr key={c.id} className="hover:bg-gray-50 transition-colors">
@@ -257,6 +356,7 @@ export default function Companies() {
                       )}
                     </div>
                   </td>
+                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(c.created_at)}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       {canManage && c.review_status === 'pending' && (

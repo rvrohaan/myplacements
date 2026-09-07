@@ -1,7 +1,8 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy import String, case, cast, func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -97,6 +98,55 @@ def _search_filter(search: str):
     )
 
 
+# Columns the company list can be ordered by, keyed by the name the UI sends.
+# Whitelisted so the query parameter can never reach an arbitrary attribute.
+SortKey = Literal["id", "name", "sector", "location", "status", "salary_max", "created_at"]
+
+# Status is an enum, so ordering by the stored value would follow the order the
+# members happen to be declared in. Rank it by how much attention a company
+# deserves instead, which is what someone sorting by status is actually after.
+_STATUS_ORDER = (
+    CompanyStatus.PRIORITY,
+    CompanyStatus.ACTIVE,
+    CompanyStatus.NEW,
+    CompanyStatus.DORMANT,
+    CompanyStatus.BLACKLISTED,
+)
+
+# The column is a Postgres enum holding the member *names* ("PRIORITY"), which is
+# what SQLAlchemy's Enum persists. Casting to text keeps the comparison in plain
+# strings — matching on the members themselves sends their lowercase values, which
+# the enum type rejects.
+_STATUS_RANK = case(
+    {status.name: rank for rank, status in enumerate(_STATUS_ORDER)},
+    value=cast(Company.status, String),
+    else_=len(_STATUS_ORDER),
+)
+
+# Text columns sort on lower(), so "eBay" lands between "Dell" and "Flipkart"
+# rather than after every capitalised name. It also keeps the order identical
+# across environments, whose collations disagree about case.
+_SORT_COLUMNS = {
+    "id": Company.id,
+    "name": func.lower(Company.name),
+    "sector": func.lower(Company.sector),
+    "location": func.lower(Company.location),
+    "status": _STATUS_RANK,
+    "salary_max": Company.salary_max,
+    "created_at": Company.created_at,
+}
+
+
+def _order_by(sort: SortKey, order: str):
+    """ORDER BY for the company list. Blank cells sort last whichever way the
+    column points, so sorting by sector doesn't open on a screen of dashes, and
+    id breaks ties — without it rows sharing a value (a bulk import shares a
+    timestamp) can shuffle between requests and repeat or skip across pages."""
+    column = _SORT_COLUMNS[sort]
+    direction = column.desc() if order == "desc" else column.asc()
+    return [direction.nullslast(), Company.id.asc()]
+
+
 def _hr_contact_key(name: Optional[str], email: Optional[str]) -> str:
     """Identity of an HR contact within one company. Email wins when present, so
     the same person listed in two source files is only imported once."""
@@ -112,14 +162,16 @@ def list_companies(
     sector: Optional[str] = None,
     search: Optional[str] = None,
     unassigned: bool = False,
+    sort: SortKey = "id",
+    order: Literal["asc", "desc"] = "asc",
     skip: int = 0,
     limit: int = Query(default=50, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """One page of companies. The total row count for the current filters is
-    returned in the ``X-Total-Count`` header so callers can paginate without the
-    response body shape changing."""
+    """One page of companies, ordered by ``sort``/``order``. The total row count
+    for the current filters is returned in the ``X-Total-Count`` header so callers
+    can paginate without the response body shape changing."""
     q = db.query(Company)
     if current_user.college_id:
         q = q.filter(Company.college_id == current_user.college_id)
@@ -145,7 +197,7 @@ def list_companies(
     if search:
         q = q.filter(_search_filter(search))
     response.headers["X-Total-Count"] = str(q.count())
-    return q.offset(skip).limit(limit).all()
+    return q.order_by(*_order_by(sort, order)).offset(skip).limit(limit).all()
 
 
 @router.post("", response_model=CompanyOut, status_code=201)
@@ -177,10 +229,14 @@ def export_companies(
     status: Optional[CompanyStatus] = None,
     sector: Optional[str] = None,
     search: Optional[str] = None,
+    sort: SortKey = "id",
+    order: Literal["asc", "desc"] = "asc",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Download the (optionally filtered) company list as an .xlsx file."""
+    """Download the (optionally filtered) company list as an .xlsx file. Takes the
+    same sort as the list endpoint so the rows arrive in the order the exporter
+    was looking at on screen."""
     q = db.query(Company)
     if current_user.college_id:
         q = q.filter(Company.college_id == current_user.college_id)
@@ -197,7 +253,7 @@ def export_companies(
     if search:
         q = q.filter(_search_filter(search))
 
-    return _companies_workbook_response(q.all())
+    return _companies_workbook_response(q.order_by(*_order_by(sort, order)).all())
 
 
 def _companies_workbook_response(companies: list[Company]) -> StreamingResponse:
