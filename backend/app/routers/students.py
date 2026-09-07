@@ -221,6 +221,12 @@ def import_students(
         rows = parse_rows(file.file.read(), STUDENT_IMPORT_COLUMNS)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="No data rows found. The sheet has the right headers but no "
+                   "students under them - fill in a row per student and re-upload.",
+        )
 
     created = 0
     skipped = 0

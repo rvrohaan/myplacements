@@ -100,27 +100,74 @@ def build_workbook(columns: list[Column], rows: list[Any], sheet_title: str) -> 
     return buffer
 
 
+def _match_headers(header_row: Any, importable: dict[str, Column]) -> dict[str, tuple[int, Column]]:
+    """Map ``attr -> (column index, Column)`` for the known headers in a row."""
+    if not header_row:
+        return {}
+    headers = [str(h).strip().lower() if h is not None else "" for h in header_row]
+    return {col.attr: (i, col) for i, h in enumerate(headers) if (col := importable.get(h))}
+
+
 def parse_rows(file_bytes: bytes, columns: list[Column]) -> list[dict]:
     """Parse an uploaded workbook into ``[{"row", "data", "errors"}, ...]``.
 
+    The sheet is chosen by looking for the template's headers rather than by
+    taking whichever tab happened to be active when the file was saved — that
+    silently imported nothing when someone kept their data on a second tab.
     Headers are matched case-insensitively; unknown columns are ignored and
     fully blank rows are skipped. Per-cell validation problems are collected
     into ``errors`` rather than raised, so one bad row never aborts the batch.
+
+    Raises ``ValueError`` if no sheet carries the expected header row, so the
+    caller can tell the user what's wrong instead of reporting "0 imported".
     """
     try:
         wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
     except Exception as exc:  # noqa: BLE001 - surface a friendly message to the API caller
         raise ValueError(f"Could not read file as .xlsx: {exc}") from exc
 
-    ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
-    if not all_rows:
-        return []
-
-    headers = [str(h).strip().lower() if h is not None else "" for h in all_rows[0]]
     importable = {c.header.lower(): c for c in columns if c.importable}
-    # attr -> (column index, Column)
-    indexed = {col.attr: (i, col) for i, h in enumerate(headers) if (col := importable.get(h))}
+    active_title = wb.active.title if wb.active is not None else None
+
+    # Score every sheet by how many known columns its first row names, then by
+    # whether it actually holds any data — a filled second tab must beat the
+    # empty template tab even when both carry the same headers. Remaining ties go
+    # to the active sheet, then to the leftmost tab.
+    best_ws = None
+    best_key = ()
+    best_indexed: dict[str, tuple[int, Column]] = {}
+    for position, sheet in enumerate(wb.worksheets):
+        rows = sheet.iter_rows(values_only=True)
+        indexed = _match_headers(next(rows, None), importable)
+        if not indexed:
+            continue
+        has_data = any(not all(_is_blank(v) for v in row) for row in rows)
+        key = (len(indexed), has_data, sheet.title == active_title, -position)
+        if key > best_key:
+            best_ws, best_key, best_indexed = sheet, key, indexed
+
+    if best_ws is None:
+        required = [c.header for c in columns if c.importable and c.required]
+        expected = required or [c.header for c in columns if c.importable][:3]
+        sheets = ", ".join(f"'{s.title}'" for s in wb.worksheets) or "none"
+        raise ValueError(
+            "Could not find the import columns in this file. The first row of a "
+            f"sheet must hold the template's column headers (e.g. {', '.join(expected)}). "
+            f"Sheets checked: {sheets}."
+        )
+
+    # A required column missing from the header row is a problem with the file,
+    # not with each row in it — report it once rather than repeating it per row.
+    missing = [c.header for c in columns if c.importable and c.required and c.attr not in best_indexed]
+    if missing:
+        raise ValueError(
+            f"Sheet '{best_ws.title}' is missing the required column(s): "
+            f"{', '.join(missing)}. Header names must match the template exactly."
+        )
+
+    # Re-read the winning sheet from the top; read-only iteration is one-shot.
+    all_rows = list(best_ws.iter_rows(values_only=True))
+    indexed = best_indexed
 
     parsed: list[dict] = []
     for row_number, raw_row in enumerate(all_rows[1:], start=2):

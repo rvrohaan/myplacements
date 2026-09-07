@@ -293,6 +293,14 @@ def import_companies(
         rows = parse_rows(file.file.read(), IMPORT_COLUMNS)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # An empty sheet used to report "0 imported" with nothing else, which reads
+    # as a failure with no cause. Say what was actually wrong.
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="No data rows found. The sheet has the right headers but no "
+                   "companies under them - fill in a row per company and re-upload.",
+        )
 
     created = 0
     skipped = 0
