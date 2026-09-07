@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Plus, UserPlus, Target, Briefcase, MapPin, Trash2, ArrowUpCircle, CheckCircle2 } from 'lucide-react'
+import { Plus, UserPlus, Target, Briefcase, MapPin, Pencil, Trash2, ArrowUpCircle, CheckCircle2 } from 'lucide-react'
 import api from '@/lib/api'
 import fetchAll from '@/lib/fetchAll'
 import { useAuthStore } from '@/store/authStore'
 import type { Officer, Assignment, AssignmentStatus, Company, UserRole } from '@/types'
 import { cn, STATUS_COLORS } from '@/lib/utils'
+import EditOfficerModal from './EditOfficerModal'
 
 const STATUS_FLOW: AssignmentStatus[] = ['active', 'accepted', 'escalated', 'completed']
 // Roles allowed to manage allocations — mirrors the backend's MANAGE_ROLES.
@@ -36,6 +37,7 @@ export default function Officers() {
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<Officer | null>(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [editing, setEditing] = useState<Officer | null>(null)
 
   const fetchOfficers = () => {
     setLoading(true)
@@ -69,11 +71,20 @@ export default function Officers() {
           </div>
         ) : (
           officers.map((o) => (
-            <button
+            <div
               key={o.id}
+              role="button"
+              tabIndex={0}
+              aria-label={`View allocations for ${o.officer_name ?? `Officer #${o.id}`}`}
               onClick={() => setSelected(o)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setSelected(o)
+                }
+              }}
               className={cn(
-                'text-left bg-white rounded-xl border p-4 space-y-3 transition hover:border-primary-300 hover:shadow-sm',
+                'text-left bg-white rounded-xl border p-4 space-y-3 cursor-pointer transition hover:border-primary-300 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400',
                 selected?.id === o.id ? 'border-primary-400 ring-1 ring-primary-200' : 'border-gray-200'
               )}
             >
@@ -82,9 +93,27 @@ export default function Officers() {
                   <p className="font-semibold text-gray-900">{o.officer_name ?? `Officer #${o.id}`}</p>
                   <p className="text-xs text-gray-500">{o.email}</p>
                 </div>
-                <div className="text-right">
-                  <p className="text-lg font-bold text-primary-600">{o.active_count}</p>
-                  <p className="text-[10px] uppercase text-gray-400">active</p>
+                <div className="flex items-start gap-1.5">
+                  <div className="text-right">
+                    <p className="text-lg font-bold text-primary-600">{o.active_count}</p>
+                    <p className="text-[10px] uppercase text-gray-400">active</p>
+                  </div>
+                  {canManage && (
+                    <Tip label="Edit details & targets">
+                      <button
+                        type="button"
+                        aria-label={`Edit ${o.officer_name ?? `officer #${o.id}`}`}
+                        onClick={(e) => {
+                          // The card itself opens the allocation panel.
+                          e.stopPropagation()
+                          setEditing(o)
+                        }}
+                        className="p-1.5 rounded-md text-gray-400 transition-colors hover:bg-primary-50 hover:text-primary-600"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </Tip>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
@@ -95,10 +124,21 @@ export default function Officers() {
               <div className="text-xs text-gray-500 border-t border-gray-100 pt-2">
                 {o.assignment_count} compan{o.assignment_count === 1 ? 'y' : 'ies'} assigned
               </div>
-            </button>
+            </div>
           ))
         )}
       </div>
+
+      {editing && canManage && (
+        <EditOfficerModal
+          officer={editing}
+          onClose={() => setEditing(null)}
+          onSaved={(updated) => {
+            setOfficers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
+            setSelected((cur) => (cur && cur.id === updated.id ? updated : cur))
+          }}
+        />
+      )}
 
       {selected && (
         <AssignmentPanel

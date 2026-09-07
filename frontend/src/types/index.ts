@@ -337,8 +337,127 @@ export interface TrainingRecord {
 }
 
 export interface AnalyticsOverview {
+  // "officer" when the numbers cover only the signed-in officer's own
+  // allocations; "college" for the full tenant view.
+  scope?: 'officer' | 'college'
   students: { total: number; placed: number; placement_rate: number }
   companies: { total: number; active: number }
   drives: { total: number }
   offers: { total: number; accepted: number; avg_ctc: number }
+}
+
+// --- Officer's personal dashboard (GET /analytics/my-work) ------------------
+
+export interface MyCompanyRow {
+  id: number
+  name: string
+  sector?: string
+  status?: CompanyStatus
+  review_status?: string
+  assignment_status?: AssignmentStatus
+  priority?: string
+  last_contacted_at?: string
+  days_since_contact?: number
+  drives: number
+  offers: number
+  stale: boolean
+}
+
+export interface FollowupRow {
+  id: number
+  company_id: number
+  company_name?: string
+  subject?: string
+  comm_type?: CommunicationType
+  next_followup_date: string
+  overdue: boolean
+}
+
+export interface ActivityRow {
+  id: number
+  company_id: number
+  company_name?: string
+  comm_type?: CommunicationType
+  subject?: string
+  communicated_at?: string
+}
+
+export interface TargetProgress {
+  target: number
+  achieved: number
+  percent: number
+}
+
+export interface MyWork {
+  officer: { id: number; name: string; region?: string; sector_expertise?: string }
+  assignments: { total: number; open: number; by_status: Record<string, number> }
+  companies: { total: number; by_status: Record<string, number>; stale: number }
+  communications: {
+    total: number
+    last_30_days: number
+    pending_followups: number
+    overdue_followups: number
+  }
+  drives: { total: number; upcoming: number; ongoing: number; completed: number }
+  offers: { total: number; won: number; avg_ctc: number }
+  students: { participated: number; placed: number }
+  targets: { companies: TargetProgress; offers: TargetProgress }
+  my_companies: MyCompanyRow[]
+  upcoming_followups: FollowupRow[]
+  recent_activity: ActivityRow[]
+}
+
+// --- Leadership view of officer progress (GET /analytics/officer-performance)
+
+// How recently the officer logged work: active (7 days), slowing (30 days),
+// idle (older), no_activity (never).
+export type ActivityStatus = 'active' | 'slowing' | 'idle' | 'no_activity'
+
+export interface OfficerPerformance {
+  officer_id: number
+  user_id: number
+  name: string
+  email?: string
+  department?: string
+  region?: string
+  sector_expertise?: string
+  companies_assigned: number
+  open_assignments: number
+  completed_assignments: number
+  communications_total: number
+  communications_30d: number
+  pending_followups: number
+  overdue_followups: number
+  drives_total: number
+  drives_completed: number
+  drives_upcoming: number
+  offers_total: number
+  offers_won: number
+  students_placed: number
+  avg_ctc: number
+  target_companies: number
+  target_offers: number
+  company_target_percent: number
+  offer_target_percent: number
+  last_activity?: string
+  activity_status: ActivityStatus
+}
+
+export interface OfficerPerformanceReport {
+  officers: OfficerPerformance[]
+  totals: {
+    officers: number
+    companies_assigned: number
+    open_assignments: number
+    completed_assignments: number
+    communications_30d: number
+    overdue_followups: number
+    drives_total: number
+    offers_won: number
+    students_placed: number
+    unassigned_companies: number
+    pending_lead_reviews: number
+    needs_attention: number
+  }
+  trend: Array<{ month: string; communications: number; drives: number; offers: number }>
 }
