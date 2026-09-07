@@ -84,7 +84,22 @@ export default function ImportExportControls({
         showToast(parts.join(' · '))
       }
     } catch (err: any) {
-      setError(err?.response?.data?.detail || `Could not import ${label.toLowerCase()}.`)
+      const detail = err?.response?.data?.detail
+      if (detail) {
+        setError(detail)
+      } else {
+        // No JSON body means the request never reached the handler — a gateway
+        // timeout on a large file, or the server erroring outright. Say which,
+        // so the cause is diagnosable instead of a flat "could not import".
+        const status = err?.response?.status
+        setError(
+          `Could not import ${label.toLowerCase()} — ` +
+            (status
+              ? `the server returned HTTP ${status}.`
+              : 'the request did not complete (timed out or the connection dropped).') +
+            ' If the file is large, try importing it in smaller batches.'
+        )
+      }
     } finally {
       setBusy(null)
       if (fileRef.current) fileRef.current.value = ''
