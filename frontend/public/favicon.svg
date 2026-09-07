@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="MyPlacement.AI">
+  <defs>
+    <linearGradient id="mp" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#mp)"/>
+  <!-- Mortarboard: cap body first, then the board, then a gradient-coloured
+       stroke along the board outline so the two stay separated at 16px. -->
+  <path d="M21 29.6 L32 34.4 L43 29.6 V39.2 Q32 48 21 39.2 Z" fill="#fff"/>
+  <path d="M32 16 L55 25.5 L32 35 L9 25.5 Z" fill="#fff"/>
+  <path d="M32 16 L55 25.5 L32 35 L9 25.5 Z" fill="none" stroke="url(#mp)" stroke-width="2.4" stroke-linejoin="round"/>
+</svg>
