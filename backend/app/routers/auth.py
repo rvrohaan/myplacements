@@ -1,3 +1,6 @@
+import secrets
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
@@ -6,11 +9,14 @@ from app.core.deps import get_current_user, require_roles
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.core.tenant import get_current_college, get_optional_college, is_admin_host
 from app.models.college import College
+from app.models.invite import InvitePurpose, UserInvite
 from app.models.student import Student
 from app.models.user import User, UserRole
 from app.schemas.user import (
     FindPortalRequest,
     FindPortalResponse,
+    InviteAccept,
+    InviteCheck,
     LoginRequest,
     PasswordReset,
     PortalMatch,
@@ -19,6 +25,7 @@ from app.schemas.user import (
     UserCreate,
     UserOut,
 )
+from app.services.invites import resolve_invite
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -102,7 +109,7 @@ def register(
     user = User(
         email=payload.email,
         full_name=payload.full_name,
-        hashed_password=get_password_hash(payload.password),
+        hashed_password=get_password_hash(payload.password or secrets.token_urlsafe(32)),
         role=payload.role,
         department=payload.department,
         college_id=college_id,
@@ -178,3 +185,74 @@ def reset_password(
     db.commit()
     db.refresh(current_user)
     return current_user
+
+
+# A link that is unknown, expired, already used or superseded gets one answer.
+# Saying which would turn the endpoint into an oracle for guessing tokens.
+_BAD_LINK = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="This link is no longer valid. Ask your administrator to send a new one.",
+)
+
+
+def _invite_for_request(
+    token: str, request: Request, db: Session, college: College | None
+) -> tuple[UserInvite, User, College | None]:
+    """Resolve a live invite and check it is being redeemed on the host it was
+    issued for - the same tenant boundary login enforces, so a link minted for
+    one college can't be spent on another."""
+    invite = resolve_invite(db, token)
+    if not invite:
+        raise _BAD_LINK
+    if invite.college_id is not None:
+        if college is None or college.id != invite.college_id:
+            raise _BAD_LINK
+    elif not is_admin_host(request):
+        # College-less accounts are platform admins, who live on the console.
+        raise _BAD_LINK
+
+    user = db.query(User).filter(User.id == invite.user_id).first()
+    # A disabled account must not be walked back in through an old link; an
+    # admin re-enabling it sends a fresh one.
+    if not user or not user.is_active:
+        raise _BAD_LINK
+    return invite, user, college
+
+
+@router.get("/invite/{token}", response_model=InviteCheck)
+def check_invite(
+    token: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    college: College | None = Depends(get_optional_college),
+):
+    """Public: confirm a setup link is live and say who it belongs to, so the
+    page can greet them by name before any password is typed."""
+    invite, user, college = _invite_for_request(token, request, db, college)
+    return InviteCheck(
+        full_name=user.full_name,
+        college_name=college.name if college else None,
+        is_reset=invite.purpose == InvitePurpose.RESET.value,
+    )
+
+
+@router.post("/invite/{token}/accept", response_model=Token)
+def accept_invite(
+    token: str,
+    payload: InviteAccept,
+    request: Request,
+    db: Session = Depends(get_db),
+    college: College | None = Depends(get_optional_college),
+):
+    """Public: set the password the link was issued for, spend the link, and
+    return a session so the new password isn't typed twice."""
+    invite, user, _ = _invite_for_request(token, request, db, college)
+
+    user.hashed_password = get_password_hash(payload.new_password)
+    user.must_reset_password = False
+    invite.used_at = datetime.utcnow()
+    db.commit()
+    db.refresh(user)
+
+    access = create_access_token(subject=user.id, college_id=user.college_id)
+    return Token(access_token=access, user=UserOut.model_validate(user))

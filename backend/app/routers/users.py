@@ -1,3 +1,4 @@
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -6,8 +7,10 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import require_roles
 from app.core.security import get_password_hash
+from app.models.invite import InvitePurpose, UserInvite
 from app.models.user import User, UserRole
-from app.schemas.user import UserCreate, UserOut, UserUpdate
+from app.schemas.user import InviteOut, UserCreate, UserCreated, UserOut, UserUpdate
+from app.services.invites import issue_and_deliver
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -40,7 +43,7 @@ def list_users(
     return q.order_by(User.created_at.desc()).offset(skip).limit(limit).all()
 
 
-@router.post("", response_model=UserOut, status_code=201)
+@router.post("", response_model=UserCreated, status_code=201)
 def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),
@@ -56,19 +59,28 @@ def create_user(
         raise HTTPException(status_code=400, detail="college_id is required")
     if db.query(User).filter(User.email == payload.email, User.college_id == college_id).first():
         raise HTTPException(status_code=400, detail="Email already registered for this college")
+    # With no password in the payload the account gets an unguessable one that
+    # is never shown to anyone: the only way in is the setup link below, which
+    # expires. A supplied password still works for scripted provisioning.
     user = User(
         email=payload.email,
         full_name=payload.full_name,
-        hashed_password=get_password_hash(payload.password),
+        hashed_password=get_password_hash(payload.password or secrets.token_urlsafe(32)),
         role=payload.role,
         department=payload.department,
         college_id=college_id,
         must_reset_password=True,
     )
     db.add(user)
+    db.flush()  # assign user.id so the invite can reference it
+
+    issued = None if payload.password else issue_and_deliver(db, user, current_user)
     db.commit()
     db.refresh(user)
-    return user
+
+    created = UserCreated.model_validate(user)
+    created.invite = InviteOut(**vars(issued)) if issued else None
+    return created
 
 
 @router.put("/{user_id}", response_model=UserOut)
@@ -90,3 +102,47 @@ def update_user(
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/{user_id}/invite", response_model=InviteOut)
+def resend_invite(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*ADMIN_ROLES)),
+):
+    """Issue a fresh password-setup link and email it.
+
+    Covers both halves of the old gap: an invite that was never redeemed, and a
+    member of staff who is locked out - there is no self-service reset, so an
+    admin re-issuing the link is how someone gets back in. Any previous link
+    stops working the moment this one is minted.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if current_user.college_id and user.college_id != current_user.college_id:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail="This account is disabled. Enable it before sending a login link.",
+        )
+    # Only the wording differs, but get it right: someone who has already set a
+    # password is being reset, not welcomed. must_reset_password alone can't tell
+    # them apart - issuing a reset sets it too - so ask whether any link for this
+    # account was ever redeemed.
+    redeemed_before = (
+        db.query(UserInvite)
+        .filter(UserInvite.user_id == user.id, UserInvite.used_at.isnot(None))
+        .first()
+        is not None
+    )
+    purpose = (
+        InvitePurpose.INVITE
+        if user.must_reset_password and not redeemed_before
+        else InvitePurpose.RESET
+    )
+    user.must_reset_password = True
+    issued = issue_and_deliver(db, user, current_user, purpose=purpose)
+    db.commit()
+    return InviteOut(**vars(issued))

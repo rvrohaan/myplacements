@@ -34,6 +34,22 @@ export interface User {
   created_at: string
 }
 
+/** Delivery outcome for the one automated channel on an invite. */
+export type EmailStatus = 'sent' | 'failed' | 'skipped'
+
+/** A one-time password-setup link, returned when an account is provisioned. */
+export interface Invite {
+  url: string
+  expires_at: string
+  email: string
+  email_status: EmailStatus
+}
+
+/** POST /users response: the account, plus the link when one was issued. */
+export interface UserCreated extends User {
+  invite?: Invite | null
+}
+
 export type CompanyStatus = 'active' | 'dormant' | 'blacklisted' | 'priority' | 'new'
 
 export interface Company {
@@ -115,7 +131,10 @@ export interface EnableLoginResult {
   student_id: number
   roll_number: string
   full_name?: string
-  temp_password: string
+  // Student accounts carry no real email address, so nothing is delivered for
+  // them automatically - staff share this link themselves.
+  invite_url: string
+  expires_at: string
 }
 
 export interface InterviewPrepItem {
@@ -285,10 +304,18 @@ export interface AllocationProposal {
   reasoning?: string
 }
 
+export type AllocationScope = 'pipeline' | 'all'
+
 export interface AllocationPreview {
   proposals: AllocationProposal[]
+  /** Every allocatable company in the college with no owner yet. */
   unassigned_count: number
   officer_count: number
+  /** How many of those the chosen scope looked at. More than `proposals.length`
+   *  means this is the top slice by importance and re-running will offer more. */
+  considered_count: number
+  scope: AllocationScope
+  limit: number
 }
 
 export type CommunicationType = 'email' | 'call' | 'whatsapp' | 'meeting' | 'linkedin'
@@ -297,7 +324,11 @@ export interface Communication {
   id: number
   company_id: number
   hr_contact_id?: number
+  logged_by_id?: number
   officer_id?: number
+  /** 'recorded' when stamped at log time, 'inferred' when backfilled from the
+   *  company allocation for entries logged before authorship was captured. */
+  officer_attribution?: string
   comm_type: CommunicationType
   subject?: string
   notes?: string
@@ -305,8 +336,14 @@ export interface Communication {
   next_followup_date?: string
   communicated_at: string
   created_at: string
+  updated_at?: string
   company_name?: string
   hr_contact_name?: string
+  logged_by_name?: string
+  logged_by_role?: UserRole
+  officer_name?: string
+  /** Whether the signed-in user may edit or delete this entry. */
+  can_edit: boolean
 }
 
 export interface TrainingModule {
@@ -460,4 +497,150 @@ export interface OfficerPerformanceReport {
     needs_attention: number
   }
   trend: Array<{ month: string; communications: number; drives: number; offers: number }>
+}
+
+// --- Daily updates (GET /daily-updates/...) ---------------------------------
+
+export type DailyUpdateKind = 'officer' | 'coordinator'
+export type DailyUpdateStatus = 'on_time' | 'late'
+export type WorkMode = 'office' | 'field' | 'travel' | 'wfh' | 'leave'
+
+/** Counts the server derives from logged activity. Officer and coordinator
+ *  updates carry different subsets, so every field is optional. */
+export interface DailyUpdateMetrics {
+  calls?: number
+  emails?: number
+  meetings?: number
+  whatsapp?: number
+  linkedin?: number
+  communications?: number
+  companies_touched?: number
+  new_companies?: number
+  hr_contacts_added?: number
+  drives_conducted?: number
+  drives_scheduled?: number
+  rounds_conducted?: number
+  offers?: number
+  offers_won?: number
+  companies_assigned?: number
+  open_followups?: number
+  overdue_followups?: number
+  stale_companies?: number
+  target_companies?: number
+  target_offers?: number
+  target_companies_percent?: number
+  target_offers_percent?: number
+  trainings_completed?: number
+  trainings_enrolled?: number
+  modules_added?: number
+  students_at_risk?: number
+  students_tracked?: number
+}
+
+export interface DailyUpdate {
+  id: number
+  college_id?: number
+  report_date: string
+  kind: DailyUpdateKind
+  submitted_by_id: number
+  officer_id?: number
+  work_mode?: WorkMode
+  highlights?: string
+  blockers?: string
+  support_needed?: string
+  plan_tomorrow?: string
+  needs_escalation: boolean
+  escalation_note?: string
+  manual_visits: number
+  manual_meetings: number
+  metrics?: DailyUpdateMetrics
+  submitted_at?: string
+  status?: DailyUpdateStatus
+  created_at?: string
+  updated_at?: string
+  reviewed_by_id?: number
+  reviewed_at?: string
+  review_note?: string
+  submitted_by_name?: string
+  submitted_by_role?: string
+  officer_name?: string
+  reviewed_by_name?: string
+  no_activity: boolean
+  can_edit: boolean
+  can_review: boolean
+}
+
+/** GET /daily-updates/today — everything the filing page needs in one call. */
+export interface DailyUpdateToday {
+  date: string
+  kind: DailyUpdateKind
+  cutoff: string
+  deadline_passed: boolean
+  enabled: boolean
+  derived: DailyUpdateMetrics
+  prompts: string[]
+  existing: DailyUpdate | null
+}
+
+export interface DailyDigestTotals {
+  calls: number
+  emails: number
+  meetings: number
+  whatsapp: number
+  linkedin: number
+  communications: number
+  companies_touched: number
+  new_companies: number
+  drives_conducted: number
+  offers: number
+  offers_won: number
+  trainings_completed: number
+}
+
+/** GET /daily-updates/digest — the whole leadership page in one call. */
+export interface DailyDigest {
+  date: string
+  cutoff: string
+  is_today: boolean
+  enabled: boolean
+  compliance: {
+    expected: number
+    filed: number
+    on_time: number
+    late: number
+    missing: number
+    on_leave: number
+  }
+  totals: DailyDigestTotals
+  /** Trailing average of the preceding days, for the up/down deltas. */
+  baseline: DailyDigestTotals
+  attention: {
+    escalations: Array<{
+      update_id: number
+      name?: string
+      escalation_note?: string
+      reviewed: boolean
+    }>
+    not_filed: Array<{ user_id: number; name: string; role: string; kind: DailyUpdateKind }>
+    zero_activity: Array<{ update_id: number; name?: string }>
+    overdue_followups: number
+    stale_companies: number
+    pending_lead_reviews: number
+    unassigned_companies: number
+  }
+  updates: DailyUpdate[]
+  trend: Array<{
+    date: string
+    expected: number
+    filed: number
+    calls: number
+    meetings: number
+    offers: number
+  }>
+  filers: number
+}
+
+export interface DailyUpdateSettings {
+  daily_update_cutoff: string
+  daily_update_enabled: boolean
 }

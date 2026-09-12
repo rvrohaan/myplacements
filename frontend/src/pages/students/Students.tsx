@@ -272,7 +272,7 @@ export default function Students() {
                       <button
                         onClick={() => enableOneLogin(s)}
                         disabled={enablingId === s.id}
-                        title="Enable student login (generates a temp password)"
+                        title="Enable student login (creates a one-time password-setup link)"
                         className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-primary-600 disabled:opacity-50"
                       >
                         <KeyRound className="w-3.5 h-3.5" />

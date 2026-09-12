@@ -1,12 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Search, UserPlus, CheckCircle2, Copy, Ban, RotateCcw } from 'lucide-react'
+import { Search, UserPlus, CheckCircle2, Ban, RotateCcw, Send } from 'lucide-react'
 import api from '@/lib/api'
 import fetchAll from '@/lib/fetchAll'
-import type { User, UserRole } from '@/types'
+import type { Invite, User, UserCreated, UserRole } from '@/types'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/authStore'
+import { useToast } from '@/components/ui/toast'
 import { isAdminHost } from '@/lib/tenant'
 import { Modal, ModalClose, ModalTitle } from '@/components/ui/modal'
+import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import { email as emailRule, required, type Rules } from '@/lib/validation'
+import {
+  CopyButton,
+  DeliveryNote,
+  EmailButton,
+  LinkBox,
+  WhatsAppButton,
+  inviteMessage,
+} from '@/components/ui/share-link'
 
 interface CollegeOption {
   id: number
@@ -33,7 +44,6 @@ interface NewUserForm {
   email: string
   role: UserRole
   department: string
-  password: string
   college_id: string
 }
 
@@ -42,8 +52,16 @@ const EMPTY_FORM: NewUserForm = {
   email: '',
   role: 'placement_officer',
   department: '',
-  password: '',
   college_id: '',
+}
+
+const RULES: Rules<NewUserForm> = {
+  college_id: required('Choose which college this user belongs to.'),
+  full_name: required('Enter the person’s full name.'),
+  email: emailRule(
+    'That doesn’t look like an email address — check for a typo.',
+    'Enter the email they will sign in with.',
+  ),
 }
 
 // On the platform console a user isn't tied to the current subdomain, so the
@@ -60,6 +78,8 @@ export default function People() {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
+  const [reissued, setReissued] = useState<{ user: User; invite: Invite } | null>(null)
+  const toast = useToast()
 
   // Load every staff account so the search box below covers all of them, not
   // just the first page the endpoint returns by default.
@@ -87,6 +107,26 @@ export default function People() {
     try {
       const { data } = await api.put(`/users/${user.id}`, { is_active: !user.is_active })
       setUsers((prev) => prev.map((u) => (u.id === user.id ? data : u)))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  // Covers both an invite that was never redeemed and a member of staff who is
+  // locked out: there is no self-service reset, so re-issuing the link is how
+  // someone gets back in.
+  const sendLoginLink = async (user: User) => {
+    setBusyId(user.id)
+    try {
+      const { data } = await api.post<Invite>(`/users/${user.id}/invite`)
+      setReissued({ user, invite: data })
+      if (data.email_status === 'sent') toast.success(`Login link emailed to ${data.email}.`)
+      // The account is pending a password again until the link is used.
+      setUsers((prev) =>
+        prev.map((u) => (u.id === user.id ? { ...u, must_reset_password: true } : u))
+      )
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Could not create a login link just now.')
     } finally {
       setBusyId(null)
     }
@@ -178,24 +218,39 @@ export default function People() {
                   <td className="px-4 py-3 text-right">
                     {u.id === currentUser?.id ? (
                       <span className="text-xs text-gray-400">You</span>
-                    ) : u.is_active ? (
-                      <button
-                        onClick={() => toggleActive(u)}
-                        disabled={busyId === u.id}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
-                      >
-                        <Ban className="w-3.5 h-3.5" />
-                        Disable
-                      </button>
                     ) : (
-                      <button
-                        onClick={() => toggleActive(u)}
-                        disabled={busyId === u.id}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-green-600 hover:text-green-700 disabled:opacity-50"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        Enable
-                      </button>
+                      <div className="flex items-center justify-end gap-3">
+                        {u.is_active && (
+                          <button
+                            onClick={() => sendLoginLink(u)}
+                            disabled={busyId === u.id}
+                            title="Email a fresh one-time link for setting their password"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-700 disabled:opacity-50"
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                            {u.must_reset_password ? 'Resend link' : 'Send link'}
+                          </button>
+                        )}
+                        {u.is_active ? (
+                          <button
+                            onClick={() => toggleActive(u)}
+                            disabled={busyId === u.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                            Disable
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => toggleActive(u)}
+                            disabled={busyId === u.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-green-600 hover:text-green-700 disabled:opacity-50"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            Enable
+                          </button>
+                        )}
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -204,6 +259,14 @@ export default function People() {
           </tbody>
         </table>
       </div>
+
+      {reissued && (
+        <InviteModal
+          user={reissued.user}
+          invite={reissued.invite}
+          onClose={() => setReissued(null)}
+        />
+      )}
 
       {showModal && (
         <AddUserModal
@@ -230,48 +293,45 @@ function AddUserModal({
   const [form, setForm] = useState<NewUserForm>(EMPTY_FORM)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [created, setCreated] = useState<NewUserForm | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [created, setCreated] = useState<UserCreated | null>(null)
 
-  const update = (field: keyof NewUserForm, value: string) =>
+  const { formRef, errors, clearError, validate } = useFieldErrors<NewUserForm>()
+
+  const update = (field: keyof NewUserForm, value: string) => {
+    clearError(field)
     setForm((f) => ({ ...f, [field]: value }))
+  }
+
+  // Only the console picks a college explicitly; on a college portal the
+  // message simply doesn't name one.
+  const collegeName = colleges.find((c) => String(c.id) === form.college_id)?.name
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    if (form.password.length < 8) {
-      setError('Password must be at least 8 characters long')
-      return
-    }
-    if (ADMIN_HOST && !form.college_id) {
-      setError('Please select a college')
-      return
-    }
+    // On a college portal the tenant is implied by the subdomain, so there's
+    // no college field to fill in.
+    const rules = ADMIN_HOST ? RULES : { ...RULES, college_id: undefined }
+    if (!validate(rules, form)) return
     setLoading(true)
     try {
-      await api.post('/users', {
+      // No password is sent: the account is created without one and the
+      // response carries a single-use link for the new user to set their own.
+      const { data } = await api.post<UserCreated>('/users', {
         full_name: form.full_name,
         email: form.email,
         role: form.role,
         department: form.department || null,
-        password: form.password,
         // Only the console targets a college explicitly; college portals infer it.
         ...(ADMIN_HOST ? { college_id: Number(form.college_id) } : {}),
       })
-      setCreated(form)
+      setCreated(data)
       onCreated()
     } catch (err: any) {
       setError(err?.response?.data?.detail || 'Could not create user')
     } finally {
       setLoading(false)
     }
-  }
-
-  const copyCredentials = () => {
-    if (!created) return
-    navigator.clipboard.writeText(`Email: ${created.email}\nTemporary password: ${created.password}`)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
   }
 
   return (
@@ -289,135 +349,218 @@ function AddUserModal({
 
         {created ? (
           <div className="p-6 space-y-4">
-            <div className="flex items-start gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
-              <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
-              <p className="text-sm text-green-800">
-                <span className="font-medium">{created.full_name}</span> can now sign in. Share the
-                credentials below — they’ll be asked to set their own password on first login.
-              </p>
-            </div>
-            <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 text-sm">
-              <div className="flex justify-between px-4 py-2.5">
-                <span className="text-gray-500">Email</span>
-                <span className="font-medium text-gray-900">{created.email}</span>
-              </div>
-              <div className="flex justify-between px-4 py-2.5">
-                <span className="text-gray-500">Temporary password</span>
-                <span className="font-mono font-medium text-gray-900">{created.password}</span>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={copyCredentials}
-                className="flex-1 flex items-center justify-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium py-2.5 rounded-lg transition-colors"
-              >
-                <Copy className="w-4 h-4" />
-                {copied ? 'Copied!' : 'Copy credentials'}
-              </button>
-              <button
-                onClick={onClose}
-                className="flex-1 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors shadow-sm shadow-primary-600/25"
-              >
-                Done
-              </button>
-            </div>
+            <InvitePanel
+              name={created.full_name}
+              invite={created.invite}
+              collegeName={collegeName}
+              intro={
+                <>
+                  <span className="font-medium">{created.full_name}</span> has been added. They set
+                  their own password from the link below — nothing here is a password, and the link
+                  stops working once used.
+                </>
+              }
+            />
+            <button
+              onClick={onClose}
+              className="w-full bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors shadow-sm shadow-primary-600/25"
+            >
+              Done
+            </button>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <form ref={formRef} onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
             {error && (
               <div role="alert" className="px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
                 {error}
               </div>
             )}
             {ADMIN_HOST && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">College</label>
+              <Field label="College" name="college_id" required error={errors.college_id}>
+                {(p) => (
+                  <select
+                    {...p}
+                    value={form.college_id}
+                    onChange={(e) => update('college_id', e.target.value)}
+                    className={inputClass(!!errors.college_id)}
+                  >
+                    <option value="" disabled>
+                      Select a college…
+                    </option>
+                    {colleges.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.code})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            )}
+            <Field label="Full name" name="full_name" required error={errors.full_name}>
+              {(p) => (
+                <input
+                  {...p}
+                  value={form.full_name}
+                  onChange={(e) => update('full_name', e.target.value)}
+                  className={inputClass(!!errors.full_name)}
+                  placeholder="Jane Doe"
+                />
+              )}
+            </Field>
+            <Field label="Email address" name="email" required error={errors.email}>
+              {(p) => (
+                <input
+                  {...p}
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => update('email', e.target.value)}
+                  className={inputClass(!!errors.email)}
+                  placeholder="jane@college.edu"
+                />
+              )}
+            </Field>
+            <Field label="Role" name="role">
+              {(p) => (
                 <select
-                  value={form.college_id}
-                  onChange={(e) => update('college_id', e.target.value)}
-                  required
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  {...p}
+                  value={form.role}
+                  onChange={(e) => update('role', e.target.value)}
+                  className={inputClass()}
                 >
-                  <option value="" disabled>
-                    Select a college…
-                  </option>
-                  {colleges.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.code})
+                  {ROLE_OPTIONS.map((r) => (
+                    <option key={r.value} value={r.value}>
+                      {r.label}
                     </option>
                   ))}
                 </select>
-              </div>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Full name</label>
-              <input
-                value={form.full_name}
-                onChange={(e) => update('full_name', e.target.value)}
-                required
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                placeholder="Jane Doe"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email address</label>
-              <input
-                type="email"
-                value={form.email}
-                onChange={(e) => update('email', e.target.value)}
-                required
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                placeholder="jane@college.edu"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-              <select
-                value={form.role}
-                onChange={(e) => update('role', e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-              >
-                {ROLE_OPTIONS.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Department <span className="text-gray-400 font-normal">(optional)</span>
-              </label>
-              <input
-                value={form.department}
-                onChange={(e) => update('department', e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                placeholder="Computer Science"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Temporary password</label>
-              <input
-                type="text"
-                value={form.password}
-                onChange={(e) => update('password', e.target.value)}
-                required
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary-500"
-                placeholder="At least 8 characters"
-              />
-              <p className="text-xs text-gray-400 mt-1">
-                The user will be required to change this on first login.
-              </p>
-            </div>
+              )}
+            </Field>
+            <Field label="Department" name="department" optional>
+              {(p) => (
+                <input
+                  {...p}
+                  value={form.department}
+                  onChange={(e) => update('department', e.target.value)}
+                  className={inputClass()}
+                  placeholder="Computer Science"
+                />
+              )}
+            </Field>
+            <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5">
+              No password needed. We’ll email them a one-time link to set their own, and show you
+              the same link to share on WhatsApp or SMS if you'd rather.
+            </p>
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-primary-600 hover:bg-primary-700 text-white font-medium py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60 shadow-sm shadow-primary-600/25"
+              className="w-full min-h-[44px] bg-primary-600 hover:bg-primary-700 text-white font-medium py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60 shadow-sm shadow-primary-600/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2"
             >
-              {loading ? 'Creating...' : 'Create user'}
+              {loading ? 'Creating…' : 'Create user & send link'}
             </button>
           </form>
         )}
+    </Modal>
+  )
+}
+
+
+/**
+ * What to do with a freshly minted setup link. Email is attempted server-side;
+ * these buttons cover the channels we can't send ourselves yet, by handing the
+ * message to the sender's own WhatsApp or mail client.
+ */
+function InvitePanel({
+  name,
+  invite,
+  collegeName,
+  intro,
+}: {
+  name: string
+  invite?: Invite | null
+  collegeName?: string
+  intro: React.ReactNode
+}) {
+  if (!invite) {
+    return (
+      <div className="flex items-start gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
+        <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
+        <p className="text-sm text-green-800">{intro}</p>
+      </div>
+    )
+  }
+
+  const message = inviteMessage(name, invite.url, collegeName)
+  const expires = formatDate(invite.expires_at)
+
+  return (
+    <>
+      <div className="flex items-start gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
+        <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
+        <p className="text-sm text-green-800">{intro}</p>
+      </div>
+
+      <div
+        className={
+          invite.email_status === 'sent'
+            ? 'px-4 py-3 bg-green-50 border border-green-200 rounded-lg'
+            : 'px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg'
+        }
+      >
+        <DeliveryNote status={invite.email_status} email={invite.email} />
+      </div>
+
+      <div className="space-y-2">
+        <LinkBox url={invite.url} />
+        <p className="text-xs text-gray-500">Works once, and expires on {expires}.</p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <CopyButton value={invite.url} label="Copy" copiedLabel="Copied" className="px-2" />
+        <WhatsAppButton message={message} className="px-2" />
+        <EmailButton
+          to={invite.email}
+          subject="Your MyPlacement.AI account"
+          body={message}
+          className="px-2"
+        />
+      </div>
+    </>
+  )
+}
+
+/** Shown after re-issuing a link from the table, so it can be sent on. */
+function InviteModal({
+  user,
+  invite,
+  onClose,
+}: {
+  user: User
+  invite: Invite
+  onClose: () => void
+}) {
+  return (
+    <Modal onClose={onClose} panelClassName="w-full max-w-md max-h-[90vh] overflow-y-auto">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+        <ModalTitle>Login link for {user.full_name}</ModalTitle>
+        <ModalClose />
+      </div>
+      <div className="p-6 space-y-4">
+        <InvitePanel
+          name={user.full_name}
+          invite={invite}
+          intro={
+            <>
+              A new link is ready. Any link sent earlier has stopped working, so send this one.
+            </>
+          }
+        />
+        <button
+          onClick={onClose}
+          className="w-full bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors shadow-sm shadow-primary-600/25"
+        >
+          Done
+        </button>
+      </div>
     </Modal>
   )
 }

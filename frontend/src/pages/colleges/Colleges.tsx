@@ -1,10 +1,23 @@
 import { useEffect, useState } from 'react'
-import { Plus, CheckCircle2, Copy, Building, ExternalLink } from 'lucide-react'
+import { Plus, CheckCircle2, Building, ExternalLink } from 'lucide-react'
 import api from '@/lib/api'
-import type { College } from '@/types'
+import type { College, Invite } from '@/types'
+import { formatDate } from '@/lib/utils'
 import { Modal, ModalClose, ModalTitle } from '@/components/ui/modal'
+import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import { all, email as emailRule, required, type Rules } from '@/lib/validation'
+import {
+  CopyButton,
+  DeliveryNote,
+  EmailButton,
+  LinkBox,
+  WhatsAppButton,
+  inviteMessage,
+} from '@/components/ui/share-link'
 
 const BASE_DOMAIN = 'myplacements.in'
+
+const SUBDOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
 interface NewCollegeForm {
   name: string
@@ -13,7 +26,6 @@ interface NewCollegeForm {
   logo_url: string
   admin_full_name: string
   admin_email: string
-  admin_password: string
 }
 
 const EMPTY_FORM: NewCollegeForm = {
@@ -23,7 +35,6 @@ const EMPTY_FORM: NewCollegeForm = {
   logo_url: '',
   admin_full_name: '',
   admin_email: '',
-  admin_password: '',
 }
 
 export default function Colleges() {
@@ -98,26 +109,51 @@ export default function Colleges() {
   )
 }
 
+const RULES: Rules<NewCollegeForm> = {
+  name: required('Enter the college’s full name.'),
+  code: all(
+    required('Choose a subdomain code, e.g. rit.'),
+    (value) =>
+      SUBDOMAIN_RE.test(value)
+        ? undefined
+        : 'Use lowercase letters, digits and hyphens only — and don’t start or end with a hyphen.',
+  ),
+  logo_url: (value) => {
+    if (!value.trim()) return undefined
+    return /^https?:\/\/.+/i.test(value.trim())
+      ? undefined
+      : 'Paste the full image address, starting with https://.'
+  },
+  admin_full_name: required('Enter the placement head’s name.'),
+  admin_email: emailRule(
+    'That doesn’t look like an email address — check for a typo.',
+    'Enter the email they will sign in with.',
+  ),
+}
+
 function AddCollegeModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [form, setForm] = useState<NewCollegeForm>(EMPTY_FORM)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [created, setCreated] = useState<NewCollegeForm | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [created, setCreated] = useState<{ form: NewCollegeForm; invite?: Invite | null } | null>(
+    null,
+  )
 
-  const update = (field: keyof NewCollegeForm, value: string) =>
+  const { formRef, errors, clearError, validate } = useFieldErrors<NewCollegeForm>()
+
+  const update = (field: keyof NewCollegeForm, value: string) => {
+    clearError(field)
     setForm((f) => ({ ...f, [field]: value }))
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    if (form.admin_password.length < 8) {
-      setError('Admin password must be at least 8 characters long')
-      return
-    }
+    if (!validate(RULES, form)) return
     setLoading(true)
     try {
-      await api.post('/colleges', {
+      // No password is chosen here: the head gets a one-time link to set theirs.
+      const { data } = await api.post('/colleges', {
         name: form.name,
         code: form.code,
         city: form.city || null,
@@ -125,26 +161,17 @@ function AddCollegeModal({ onClose, onCreated }: { onClose: () => void; onCreate
         admin: {
           email: form.admin_email,
           full_name: form.admin_full_name,
-          password: form.admin_password,
         },
       })
-      setCreated(form)
+      setCreated({ form, invite: data.invite })
       onCreated()
     } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Could not create college')
+      setError(
+        err?.response?.data?.detail || 'Could not create this college. Check your connection and try again.',
+      )
     } finally {
       setLoading(false)
     }
-  }
-
-  const copyCredentials = () => {
-    if (!created) return
-    navigator.clipboard.writeText(
-      `Portal: https://${created.code}.${BASE_DOMAIN}\n` +
-        `Email: ${created.admin_email}\nTemporary password: ${created.admin_password}`
-    )
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
   }
 
   return (
@@ -165,148 +192,175 @@ function AddCollegeModal({ onClose, onCreated }: { onClose: () => void; onCreate
             <div className="flex items-start gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
               <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
               <p className="text-sm text-green-800">
-                <span className="font-medium">{created.name}</span> is live. Share the portal link
-                and credentials with its admin — they’ll set their own password on first login.
+                <span className="font-medium">{created.form.name}</span> is live at{' '}
+                <span className="font-medium">
+                  {created.form.code}.{BASE_DOMAIN}
+                </span>
+                . Its placement head sets their own password from the link below.
               </p>
             </div>
-            <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 text-sm">
-              <div className="flex justify-between px-4 py-2.5">
-                <span className="text-gray-500">Portal</span>
-                <span className="font-medium text-gray-900">{created.code}.{BASE_DOMAIN}</span>
-              </div>
-              <div className="flex justify-between px-4 py-2.5">
-                <span className="text-gray-500">Admin email</span>
-                <span className="font-medium text-gray-900">{created.admin_email}</span>
-              </div>
-              <div className="flex justify-between px-4 py-2.5">
-                <span className="text-gray-500">Temporary password</span>
-                <span className="font-mono font-medium text-gray-900">{created.admin_password}</span>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={copyCredentials}
-                className="flex-1 flex items-center justify-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium py-2.5 rounded-lg transition-colors"
-              >
-                <Copy className="w-4 h-4" />
-                {copied ? 'Copied!' : 'Copy details'}
-              </button>
-              <button
-                onClick={onClose}
-                className="flex-1 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors shadow-sm shadow-primary-600/25"
-              >
-                Done
-              </button>
-            </div>
+
+            {created.invite && (
+              <>
+                <div
+                  className={
+                    created.invite.email_status === 'sent'
+                      ? 'px-4 py-3 bg-green-50 border border-green-200 rounded-lg'
+                      : 'px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg'
+                  }
+                >
+                  <DeliveryNote
+                    status={created.invite.email_status}
+                    email={created.invite.email}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <LinkBox url={created.invite.url} />
+                  <p className="text-xs text-gray-500">
+                    Works once, and expires on {formatDate(created.invite.expires_at)}.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <CopyButton value={created.invite.url} label="Copy" className="px-2" />
+                  <WhatsAppButton
+                    message={inviteMessage(
+                      created.form.admin_full_name,
+                      created.invite.url,
+                      created.form.name,
+                    )}
+                    className="px-2"
+                  />
+                  <EmailButton
+                    to={created.invite.email}
+                    subject={`Your ${created.form.name} placement portal`}
+                    body={inviteMessage(
+                      created.form.admin_full_name,
+                      created.invite.url,
+                      created.form.name,
+                    )}
+                    className="px-2"
+                  />
+                </div>
+              </>
+            )}
+
+            <button
+              onClick={onClose}
+              className="w-full bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors shadow-sm shadow-primary-600/25"
+            >
+              Done
+            </button>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <form ref={formRef} onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
             {error && (
               <div role="alert" className="px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
                 {error}
               </div>
             )}
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">College name</label>
-              <input
-                value={form.name}
-                onChange={(e) => update('name', e.target.value)}
-                required
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                placeholder="Ramaiah Institute of Technology"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Subdomain code</label>
-              <div className="flex items-center">
+            <Field label="College name" name="name" required error={errors.name}>
+              {(p) => (
                 <input
-                  value={form.code}
-                  onChange={(e) => update('code', e.target.value.toLowerCase())}
-                  required
-                  pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"
-                  title="Lowercase letters, digits and hyphens only"
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-l-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  placeholder="rit"
+                  {...p}
+                  value={form.name}
+                  onChange={(e) => update('name', e.target.value)}
+                  className={inputClass(!!errors.name)}
+                  placeholder="Ramaiah Institute of Technology"
                 />
-                <span className="px-3 py-2.5 border border-l-0 border-gray-300 rounded-r-lg bg-gray-50 text-sm text-gray-500 whitespace-nowrap">
-                  .{BASE_DOMAIN}
-                </span>
-              </div>
-              <p className="text-xs text-gray-400 mt-1">Lowercase letters, digits and hyphens. This is the portal address.</p>
-            </div>
+              )}
+            </Field>
+
+            <Field
+              label="Subdomain code"
+              name="code"
+              required
+              error={errors.code}
+              hint="Lowercase letters, digits and hyphens. This becomes the portal address."
+            >
+              {(p) => (
+                <div className="flex items-center">
+                  <input
+                    {...p}
+                    value={form.code}
+                    onChange={(e) => update('code', e.target.value.toLowerCase())}
+                    className={inputClass(!!errors.code, 'rounded-r-none font-mono')}
+                    placeholder="rit"
+                  />
+                  <span className="px-3 py-2.5 border border-l-0 border-gray-300 rounded-r-lg bg-gray-50 text-sm text-gray-500 whitespace-nowrap">
+                    .{BASE_DOMAIN}
+                  </span>
+                </div>
+              )}
+            </Field>
 
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  City <span className="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <input
-                  value={form.city}
-                  onChange={(e) => update('city', e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  placeholder="Bengaluru"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Logo URL <span className="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <input
-                  value={form.logo_url}
-                  onChange={(e) => update('logo_url', e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  placeholder="https://..."
-                />
-              </div>
+              <Field label="City" name="city" optional>
+                {(p) => (
+                  <input
+                    {...p}
+                    value={form.city}
+                    onChange={(e) => update('city', e.target.value)}
+                    className={inputClass()}
+                    placeholder="Bengaluru"
+                  />
+                )}
+              </Field>
+              <Field label="Logo URL" name="logo_url" optional error={errors.logo_url}>
+                {(p) => (
+                  <input
+                    {...p}
+                    type="url"
+                    value={form.logo_url}
+                    onChange={(e) => update('logo_url', e.target.value)}
+                    className={inputClass(!!errors.logo_url)}
+                    placeholder="https://..."
+                  />
+                )}
+              </Field>
             </div>
 
             <div className="pt-2 border-t border-gray-100">
               <p className="text-sm font-semibold text-gray-700 mb-3">First admin (placement head)</p>
               <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Full name</label>
-                  <input
-                    value={form.admin_full_name}
-                    onChange={(e) => update('admin_full_name', e.target.value)}
-                    required
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    placeholder="Jane Doe"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Email address</label>
-                  <input
-                    type="email"
-                    value={form.admin_email}
-                    onChange={(e) => update('admin_email', e.target.value)}
-                    required
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    placeholder="head@college.edu"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Temporary password</label>
-                  <input
-                    type="text"
-                    value={form.admin_password}
-                    onChange={(e) => update('admin_password', e.target.value)}
-                    required
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    placeholder="At least 8 characters"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">They’ll be asked to change this on first login.</p>
-                </div>
+                <Field label="Full name" name="admin_full_name" required error={errors.admin_full_name}>
+                  {(p) => (
+                    <input
+                      {...p}
+                      value={form.admin_full_name}
+                      onChange={(e) => update('admin_full_name', e.target.value)}
+                      className={inputClass(!!errors.admin_full_name)}
+                      placeholder="Jane Doe"
+                    />
+                  )}
+                </Field>
+                <Field label="Email address" name="admin_email" required error={errors.admin_email}>
+                  {(p) => (
+                    <input
+                      {...p}
+                      type="email"
+                      value={form.admin_email}
+                      onChange={(e) => update('admin_email', e.target.value)}
+                      className={inputClass(!!errors.admin_email)}
+                      placeholder="head@college.edu"
+                    />
+                  )}
+                </Field>
+                <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5">
+                  No password needed — we’ll email them a one-time link to set their own, and show
+                  you the same link to share.
+                </p>
               </div>
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-primary-600 hover:bg-primary-700 text-white font-medium py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60 shadow-sm shadow-primary-600/25"
+              className="w-full min-h-[44px] bg-primary-600 hover:bg-primary-700 text-white font-medium py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60 shadow-sm shadow-primary-600/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2"
             >
-              {loading ? 'Creating...' : 'Create college'}
+              {loading ? 'Creating…' : 'Create college & send link'}
             </button>
           </form>
         )}

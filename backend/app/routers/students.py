@@ -19,6 +19,7 @@ from app.schemas.student import (
     StudentUpdate,
 )
 from app.services.ai_service import generate_student_gap_report
+from app.services.invites import issue_and_deliver
 from app.services.excel_io import XLSX_MEDIA_TYPE, Column, build_workbook, parse_rows
 from app.services.student_scoring import assess
 
@@ -363,19 +364,23 @@ def update_student(
 STAFF_ROLES = (UserRole.PRINCIPAL, UserRole.PRO_CHANCELLOR, UserRole.DEPUTY_PRO_CHANCELLOR, UserRole.PLACEMENT_OFFICER)
 
 
-def _enable_student_login(db: Session, student: Student) -> EnableLoginResult:
-    """Activate the student's backing account with a fresh temp password and
-    force a reset on first sign-in. Returns the one-time temp password."""
-    temp_password = secrets.token_urlsafe(6)
+def _enable_student_login(db: Session, student: Student, actor: User) -> EnableLoginResult:
+    """Activate the student's backing account and mint a one-time link they use
+    to choose their own password.
+
+    No temporary password is created, so nothing that keeps working leaves this
+    building: the link expires, is single-use, and a re-issue kills the old one.
+    """
     user = student.user
-    user.hashed_password = get_password_hash(temp_password)
     user.is_active = True
     user.must_reset_password = True
+    issued = issue_and_deliver(db, user, actor)
     return EnableLoginResult(
         student_id=student.id,
         roll_number=student.roll_number,
         full_name=student.full_name,
-        temp_password=temp_password,
+        invite_url=issued.url,
+        expires_at=issued.expires_at,
     )
 
 
@@ -385,11 +390,11 @@ def enable_login_bulk(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(*STAFF_ROLES)),
 ):
-    """Bulk-activate student logins. Returns one-time temp passwords to hand out."""
+    """Bulk-activate student logins. Returns one password-setup link each."""
     q = db.query(Student).filter(Student.id.in_(payload.student_ids))
     if current_user.college_id:
         q = q.filter(Student.college_id == current_user.college_id)
-    results = [_enable_student_login(db, s) for s in q.all() if s.user]
+    results = [_enable_student_login(db, s, current_user) for s in q.all() if s.user]
     db.commit()
     return results
 
@@ -400,11 +405,11 @@ def enable_login(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(*STAFF_ROLES)),
 ):
-    """Activate one student's login and return a one-time temp password."""
+    """Activate one student's login and return their password-setup link."""
     student = _get_owned_student(db, student_id, current_user)
     if not student.user:
         raise HTTPException(status_code=400, detail="Student has no backing account")
-    result = _enable_student_login(db, student)
+    result = _enable_student_login(db, student, current_user)
     db.commit()
     return result
 

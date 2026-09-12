@@ -1,5 +1,6 @@
 from app.models.college import College
 from app.models.user import User, UserRole
+from app.models.invite import UserInvite, InvitePurpose
 from app.models.company import Company, HRContact, CompanyStatus
 from app.models.student import Student, PlacementStatus, RiskCategory
 from app.models.officer import PlacementOfficer, CompanyAssignment
@@ -11,6 +12,7 @@ from app.models.training import TrainingModule, StudentTraining
 __all__ = [
     "College",
     "User", "UserRole",
+    "UserInvite", "InvitePurpose",
     "Company", "HRContact", "CompanyStatus",
     "Student", "PlacementStatus", "RiskCategory",
     "PlacementOfficer", "CompanyAssignment",

@@ -21,12 +21,26 @@ Legend: `[ ]` pending · `[~]` partial / backend-only · `[x]` done
   + JWT `college_id`; per-college roll-number uniqueness. See memory `multitenancy_subdomains`.
 - [x] **Student Portal** (2026-06-19): students sign in with **roll number + password** on
   their college subdomain (Student/Staff toggle on the login screen). Admin "Enable login"
-  (single + bulk) on the Students page issues one-time temp passwords (forced reset on first
-  sign-in). Role-gated portal (`/portal`) with: Dashboard (readiness/risk/skills + resume
+  (single + bulk) on the Students page issues one-time password-setup links (see
+  *Invite links* below; it issued temp passwords until 2026-09-12). Role-gated portal (`/portal`) with: Dashboard (readiness/risk/skills + resume
   card), Mock Interview practice (Q+A, `generate_interview_prep`), Skill Report (gap report),
   AI Resume Review (`review_resume`), Jobs & Drives with self-apply. Backend:
   `auth/student/login`, `students/{id}/enable-login` + bulk, `/portal/*`. Demo students
   seeded (CS21001/demo1234). See memory `student_portal`.
+- [x] **Invite links instead of temporary passwords** (2026-09-12): every account is now
+  provisioned with a single-use, expiring link the person uses to set their own password —
+  Add user (People), college + first-admin onboarding (console) and student "Enable login"
+  all issue one instead of a temp password, and a **Send/Resend link** action on People
+  re-issues one (which also covers staff lockouts, since there is no self-service reset).
+  Backend: `user_invites` (SHA-256 of the token only, single-use, revoked by a re-issue,
+  tenant-bound), public `GET /auth/invite/{token}` + `POST /auth/invite/{token}/accept`
+  (accepting signs you in), `POST /users/{id}/invite`. Email delivery via **Resend**
+  (`RESEND_API_KEY`, `MAIL_FROM`) — the same mechanism MyOBE uses; with no key set, links are
+  still issued and shared by hand. Frontend: public `/accept-invite/:token`.
+  **SMS + WhatsApp are not automated**: both need lead-time registrations (TRAI DLT for SMS,
+  a Meta-approved template for WhatsApp), and neither `users` nor `students` holds a phone
+  number yet — so the UI hands the message to the sender's own WhatsApp via `wa.me` instead.
+  See memory `invite_links`.
 - [x] **Resume upload (PDF)** (2026-06-19): students upload a PDF on the dashboard
   (`POST /portal/me/resume`, stored under `uploads/`, served at `/api/uploads/*`). A resume
   is **required to apply**; each application snapshots `resume_url` onto the participant; staff

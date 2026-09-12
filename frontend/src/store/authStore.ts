@@ -9,6 +9,7 @@ interface AuthState {
   login: (email: string, password: string) => Promise<User>
   studentLogin: (rollNumber: string, password: string) => Promise<User>
   resetPassword: (newPassword: string) => Promise<void>
+  acceptInvite: (token: string, password: string) => Promise<User>
   logout: () => void
   isAuthenticated: () => boolean
   mustResetPassword: () => boolean
@@ -29,6 +30,16 @@ export const useAuthStore = create<AuthState>()(
         const { data } = await api.post('/auth/student/login', {
           roll_number: rollNumber,
           password,
+        })
+        localStorage.setItem('token', data.access_token)
+        set({ user: data.user, token: data.access_token })
+        return data.user as User
+      },
+      // Redeeming an invite link both sets the password and signs you in, so
+      // it lands a session exactly like login does.
+      acceptInvite: async (token, password) => {
+        const { data } = await api.post(`/auth/invite/${encodeURIComponent(token)}/accept`, {
+          new_password: password,
         })
         localStorage.setItem('token', data.access_token)
         set({ user: data.user, token: data.access_token })

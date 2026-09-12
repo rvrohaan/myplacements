@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/authStore'
 import Layout from '@/components/layout/Layout'
 import Login from '@/pages/auth/Login'
 import ResetPassword from '@/pages/auth/ResetPassword'
+import AcceptInvite from '@/pages/auth/AcceptInvite'
 import Dashboard from '@/pages/dashboard/Dashboard'
 import Companies from '@/pages/companies/Companies'
 import CompanyDetail from '@/pages/companies/CompanyDetail'
@@ -84,6 +85,9 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/reset-password" element={<ResetPasswordRoute />} />
+        {/* Public: the token in the URL is the credential, so no session is
+            required (and an existing one is irrelevant). */}
+        <Route path="/accept-invite/:token" element={<AcceptInvite />} />
         <Route
           path="/portal"
           element={

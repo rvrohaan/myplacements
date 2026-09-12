@@ -24,7 +24,10 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str
+    # Optional: leave it out and the account is created with no usable password,
+    # and the caller gets a one-time setup link to send instead. A password is
+    # still accepted for scripted/offline provisioning.
+    password: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
@@ -34,6 +37,32 @@ class UserUpdate(BaseModel):
 
 
 class PasswordReset(BaseModel):
+    new_password: str = Field(min_length=8)
+
+
+class InviteOut(BaseModel):
+    """The one-time password-setup link handed back to whoever provisioned the
+    account, so they can send it on any channel."""
+
+    url: str
+    expires_at: datetime
+    # Address we attempted, and what happened: sent | failed | skipped.
+    # "skipped" means nothing was attempted (no mail provider configured, or a
+    # login-less student account with no real address).
+    email: str
+    email_status: str
+
+
+class InviteCheck(BaseModel):
+    """What the public accept-invite page may show before anyone authenticates:
+    enough to confirm the link is for you, and nothing more."""
+
+    full_name: str
+    college_name: Optional[str] = None
+    is_reset: bool = False
+
+
+class InviteAccept(BaseModel):
     new_password: str = Field(min_length=8)
 
 
@@ -48,6 +77,13 @@ class UserOut(UserBase):
 
     class Config:
         from_attributes = True
+
+
+class UserCreated(UserOut):
+    """Create-user response: the account plus the setup link, when one was
+    issued. Null when the caller supplied a password itself."""
+
+    invite: Optional[InviteOut] = None
 
 
 class Token(BaseModel):

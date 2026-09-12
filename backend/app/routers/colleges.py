@@ -1,4 +1,5 @@
 import re
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -11,6 +12,8 @@ from app.core.security import get_password_hash
 from app.core.tenant import get_current_college
 from app.models.college import College
 from app.models.user import User, UserRole
+from app.schemas.user import InviteOut
+from app.services.invites import issue_and_deliver
 
 router = APIRouter(prefix="/colleges", tags=["colleges"])
 
@@ -20,8 +23,10 @@ SUPER_ADMIN_ONLY = require_roles(UserRole.SUPER_ADMIN)
 # A college code doubles as its subdomain label, so it must be a valid DNS label:
 # lowercase letters, digits and hyphens, not starting/ending with a hyphen.
 _SUBDOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
-# Reserved labels that must never become a tenant subdomain.
-_RESERVED_CODES = {"www", "api", "app", "admin", "mail", "static", "assets"}
+# Reserved labels that must never become a tenant subdomain. "send" carries the
+# SPF/bounce records for outbound email, so a college claiming it would find its
+# portal shadowed by those records rather than the tenant wildcard.
+_RESERVED_CODES = {"www", "api", "app", "admin", "mail", "send", "static", "assets"}
 
 
 class FirstAdmin(BaseModel):
@@ -29,7 +34,9 @@ class FirstAdmin(BaseModel):
 
     email: EmailStr
     full_name: str
-    password: str = Field(min_length=8)
+    # Optional: with no password the account is created without a usable one and
+    # the response carries a single-use link for the head to set their own.
+    password: Optional[str] = Field(default=None, min_length=8)
 
 
 class CollegeCreate(BaseModel):
@@ -77,13 +84,24 @@ class CollegeOut(BaseModel):
         from_attributes = True
 
 
+class CollegeCreated(CollegeOut):
+    """Create response: the college, plus the first admin's setup link when one
+    was issued."""
+
+    invite: Optional[InviteOut] = None
+
+
 @router.get("", response_model=list[CollegeOut])
 def list_colleges(db: Session = Depends(get_db), _: User = Depends(SUPER_ADMIN_ONLY)):
     return db.query(College).filter(College.is_active == True).all()
 
 
-@router.post("", response_model=CollegeOut, status_code=201)
-def create_college(payload: CollegeCreate, db: Session = Depends(get_db), _: User = Depends(SUPER_ADMIN_ONLY)):
+@router.post("", response_model=CollegeCreated, status_code=201)
+def create_college(
+    payload: CollegeCreate,
+    db: Session = Depends(get_db),
+    actor: User = Depends(SUPER_ADMIN_ONLY),
+):
     if db.query(College).filter(College.code == payload.code).first():
         raise HTTPException(status_code=400, detail="College code already exists")
     if payload.admin and db.query(User).filter(User.email == payload.admin.email).first():
@@ -93,21 +111,29 @@ def create_college(payload: CollegeCreate, db: Session = Depends(get_db), _: Use
     db.add(college)
     db.flush()  # assign college.id for the admin FK
 
+    issued = None
     if payload.admin:
-        db.add(
-            User(
-                email=payload.admin.email,
-                full_name=payload.admin.full_name,
-                hashed_password=get_password_hash(payload.admin.password),
-                role=UserRole.PRO_CHANCELLOR,
-                college_id=college.id,
-                must_reset_password=True,  # force a password change on first login
-            )
+        # Without a password in the payload the account gets an unguessable one
+        # nobody ever sees; the setup link below is the only way in.
+        admin = User(
+            email=payload.admin.email,
+            full_name=payload.admin.full_name,
+            hashed_password=get_password_hash(payload.admin.password or secrets.token_urlsafe(32)),
+            role=UserRole.PRO_CHANCELLOR,
+            college_id=college.id,
+            must_reset_password=True,
         )
+        db.add(admin)
+        db.flush()  # assign admin.id for the invite FK
+        if not payload.admin.password:
+            issued = issue_and_deliver(db, admin, actor=actor)
 
     db.commit()
     db.refresh(college)
-    return college
+
+    created = CollegeCreated.model_validate(college)
+    created.invite = InviteOut(**vars(issued)) if issued else None
+    return created
 
 
 @router.get("/current", response_model=CollegeBranding)

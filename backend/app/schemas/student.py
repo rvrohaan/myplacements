@@ -78,4 +78,8 @@ class EnableLoginResult(BaseModel):
     student_id: int
     roll_number: str
     full_name: Optional[str] = None
-    temp_password: str
+    # One-time link the student uses to choose their own password. Student
+    # accounts carry no real email address, so nothing is delivered for them
+    # automatically - staff share this link from the Students tab.
+    invite_url: str
+    expires_at: datetime
