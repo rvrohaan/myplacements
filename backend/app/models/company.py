@@ -7,6 +7,15 @@ from sqlalchemy.orm import relationship
 from app.core.database import Base
 
 
+# A role the company hires for. Plain strings rather than native Postgres
+# enums (matching CompanyAssignment / DailyUpdate): both lists will grow, and adding
+# a value to a native enum needs an autocommit migration.
+ROLE_TYPES = ("full_time", "internship", "internship_ppo", "contract", "apprenticeship")
+
+# "open" means actively recruiting; "filled" is closed because the seats went.
+ROLE_STATUSES = ("open", "on_hold", "filled", "closed")
+
+
 class CompanyStatus(str, enum.Enum):
     ACTIVE = "active"
     DORMANT = "dormant"
@@ -47,6 +56,12 @@ class Company(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     hr_contacts = relationship("HRContact", back_populates="company", cascade="all, delete-orphan")
+    roles = relationship(
+        "CompanyRole",
+        back_populates="company",
+        cascade="all, delete-orphan",
+        order_by="CompanyRole.created_at",
+    )
     assignments = relationship("CompanyAssignment", back_populates="company")
     drives = relationship("Drive", back_populates="company")
     communications = relationship("Communication", back_populates="company")
@@ -76,3 +91,50 @@ class HRContact(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     company = relationship("Company", back_populates="hr_contacts")
+
+
+class CompanyRole(Base):
+    """A job role / offer the company recruits for.
+
+    This is the company's standing catalogue - "Infosys hires Systems Engineers
+    at 3.6 LPA and Digital Specialist Engineers at 9.5 LPA" - and it outlives any
+    one campus visit. A ``Drive`` is the scheduled event that fills such a role in
+    a given season; a role can seed many drives across batches, and a role with no
+    drive yet is still worth recording the moment HR mentions it.
+    """
+
+    __tablename__ = "company_roles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    title = Column(String, nullable=False)
+    role_type = Column(String, nullable=False, default="full_time")
+    status = Column(String, nullable=False, default="open")
+    # Annual package in LPA. A fixed package sets both ends to the same number.
+    ctc_min = Column(Float, nullable=True)
+    ctc_max = Column(Float, nullable=True)
+    # Monthly stipend for internships, in rupees - a different unit from ctc_*,
+    # so it gets its own column rather than overloading the package range.
+    stipend = Column(Float, nullable=True)
+    openings = Column(Integer, nullable=True)
+    location = Column(String, nullable=True)
+    work_mode = Column(String, nullable=True)
+    eligible_branches = Column(String, nullable=True)
+    min_cgpa = Column(Float, nullable=True)
+    max_backlogs = Column(Integer, nullable=True)
+    skills = Column(String, nullable=True)
+    job_description = Column(Text, nullable=True)
+    apply_deadline = Column(DateTime, nullable=True)
+    posting_url = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    college_id = Column(Integer, ForeignKey("colleges.id"), nullable=True)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    company = relationship("Company", back_populates="roles")
+    created_by = relationship("User")
+
+    @property
+    def created_by_name(self) -> str | None:
+        return self.created_by.full_name if self.created_by else None

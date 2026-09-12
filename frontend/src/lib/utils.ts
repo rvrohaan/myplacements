@@ -42,6 +42,11 @@ export const STATUS_COLORS: Record<string, string> = {
   selected: 'bg-green-100 text-green-700',
   rejected: 'bg-red-100 text-red-700',
   withdrawn: 'bg-amber-100 text-amber-700',
+  // Company role openings
+  open: 'bg-green-100 text-green-700',
+  on_hold: 'bg-yellow-100 text-yellow-700',
+  filled: 'bg-blue-100 text-blue-700',
+  closed: 'bg-gray-100 text-gray-700',
   // Officer assignment workflow
   accepted: 'bg-blue-100 text-blue-700',
   escalated: 'bg-red-100 text-red-700',

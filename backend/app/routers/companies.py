@@ -3,11 +3,11 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import String, case, cast, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_roles
-from app.models.company import Company, CompanyStatus, HRContact
+from app.models.company import Company, CompanyRole, CompanyStatus, HRContact
 from app.models.officer import CompanyAssignment, PlacementOfficer
 from app.models.user import User, UserRole
 
@@ -16,6 +16,9 @@ MANAGE_ROLES = (UserRole.SUPER_ADMIN, UserRole.PRINCIPAL, UserRole.PRO_CHANCELLO
 from app.schemas.company import (
     CompanyCreate,
     CompanyOut,
+    CompanyRoleCreate,
+    CompanyRoleOut,
+    CompanyRoleUpdate,
     CompanyUpdate,
     DraftEmailRequest,
     DraftEmailResponse,
@@ -49,6 +52,21 @@ def _officer_company_ids(db: Session, user: User) -> list[int]:
         .all()
     )
     return [r[0] for r in rows]
+
+
+def _accessible_company(company_id: int, db: Session, user: User) -> Company:
+    """The company, or 404 — applying the same visibility rule as the detail view:
+    officers reach only companies allocated to them. A 404 rather than a 403 so a
+    company an officer may not see doesn't leak its existence."""
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if user.college_id and company.college_id and company.college_id != user.college_id:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if user.role == UserRole.PLACEMENT_OFFICER and company.id not in _officer_company_ids(db, user):
+        raise HTTPException(status_code=404, detail="Company not found")
+    return company
+
 
 # Column spec driving Excel export, the import template, and import parsing.
 COMPANY_COLUMNS = [
@@ -197,6 +215,11 @@ def list_companies(
     if search:
         q = q.filter(_search_filter(search))
     response.headers["X-Total-Count"] = str(q.count())
+    # CompanyOut carries each company's contacts and roles, so load both in one
+    # extra query each rather than lazily per row — 50 companies a page would
+    # otherwise be 100 follow-up queries. Applied after count() so the total
+    # stays a plain COUNT.
+    q = q.options(selectinload(Company.hr_contacts), selectinload(Company.roles))
     return q.order_by(*_order_by(sort, order)).offset(skip).limit(limit).all()
 
 
@@ -362,13 +385,7 @@ def import_companies(
 
 @router.get("/{company_id}", response_model=CompanyOut)
 def get_company(company_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-    # Placement officers may only open companies allocated to them.
-    if current_user.role == UserRole.PLACEMENT_OFFICER and company.id not in _officer_company_ids(db, current_user):
-        raise HTTPException(status_code=404, detail="Company not found")
-    return company
+    return _accessible_company(company_id, db, current_user)
 
 
 def _get_reviewable_company(company_id: int, db: Session, current_user: User) -> Company:
@@ -412,13 +429,9 @@ def decline_company(
 def update_company(
     company_id: int, payload: CompanyUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
     # Officers work the companies allocated to them — including moving a company
     # through its status as the relationship develops — and nothing else.
-    if current_user.role == UserRole.PLACEMENT_OFFICER and company.id not in _officer_company_ids(db, current_user):
-        raise HTTPException(status_code=404, detail="Company not found")
+    company = _accessible_company(company_id, db, current_user)
     data = payload.model_dump(exclude_none=True)
     for field, value in data.items():
         setattr(company, field, value)
@@ -514,3 +527,83 @@ async def company_exam_questions(
         raise HTTPException(status_code=404, detail="Company not found")
     questions = await generate_exam_questions(payload.job_role, company.name, company.domain or "N/A")
     return {"questions": questions}
+
+
+@router.get("/{company_id}/roles", response_model=list[CompanyRoleOut])
+def list_company_roles(
+    company_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    """Every role this company recruits for, oldest first."""
+    company = _accessible_company(company_id, db, current_user)
+    return (
+        db.query(CompanyRole)
+        .filter(CompanyRole.company_id == company.id)
+        .order_by(CompanyRole.created_at.asc(), CompanyRole.id.asc())
+        .all()
+    )
+
+
+@router.post("/{company_id}/roles", response_model=CompanyRoleOut, status_code=201)
+def add_company_role(
+    company_id: int,
+    payload: CompanyRoleCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record a role the company hires for. Officers may add roles to the
+    companies allocated to them — capturing what HR said is the job."""
+    company = _accessible_company(company_id, db, current_user)
+    role = CompanyRole(
+        **payload.model_dump(),
+        company_id=company.id,
+        college_id=company.college_id or current_user.college_id,
+        created_by_id=current_user.id,
+    )
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+def _get_role(company_id: int, role_id: int, db: Session, current_user: User) -> CompanyRole:
+    _accessible_company(company_id, db, current_user)
+    role = (
+        db.query(CompanyRole)
+        .filter(CompanyRole.id == role_id, CompanyRole.company_id == company_id)
+        .first()
+    )
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    return role
+
+
+@router.put("/{company_id}/roles/{role_id}", response_model=CompanyRoleOut)
+def update_company_role(
+    company_id: int,
+    role_id: int,
+    payload: CompanyRoleUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Patch a role. Only the fields present in the request are touched, so a
+    status-only change from the list doesn't blank out the rest of the role —
+    but an explicit null does clear a field, which is how a deadline is removed."""
+    role = _get_role(company_id, role_id, db, current_user)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        # title and role_type/status are not nullable — ignore a null for those
+        # rather than writing one and breaking the row.
+        if value is None and field in ("title", "role_type", "status"):
+            continue
+        setattr(role, field, value)
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+@router.delete("/{company_id}/roles/{role_id}", status_code=204)
+def delete_company_role(
+    company_id: int, role_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    role = _get_role(company_id, role_id, db, current_user)
+    db.delete(role)
+    db.commit()

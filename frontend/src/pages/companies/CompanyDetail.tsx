@@ -16,6 +16,7 @@ import EditCompanyModal from './EditCompanyModal'
 import AddHRContactModal from './AddHRContactModal'
 import DraftEmailModal from './DraftEmailModal'
 import InterviewQuestionsModal from './InterviewQuestionsModal'
+import RolesPanel from './RolesPanel'
 
 const COMPANY_STATUS_OPTIONS: StatusOption<CompanyStatus>[] = [
   { value: 'new', label: 'new' },
@@ -37,6 +38,8 @@ export default function CompanyDetail() {
   const [showEdit, setShowEdit] = useState(false)
   const [showAddContact, setShowAddContact] = useState(false)
   const [showInterviewQs, setShowInterviewQs] = useState(false)
+  // Role title the question generator opens on, when launched from a role card.
+  const [interviewQsRole, setInterviewQsRole] = useState('')
   const [emailContact, setEmailContact] = useState<HRContact | null>(null)
 
   const refresh = () => api.get(`/companies/${id}`).then((r) => setCompany(r.data))
@@ -108,7 +111,10 @@ export default function CompanyDetail() {
           Edit
         </button>
         <button
-          onClick={() => setShowInterviewQs(true)}
+          onClick={() => {
+            setInterviewQsRole('')
+            setShowInterviewQs(true)
+          }}
           className="flex items-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg"
         >
           <MessageSquare className="w-4 h-4" />
@@ -226,6 +232,17 @@ export default function CompanyDetail() {
         </div>
       </div>
 
+      <RolesPanel
+        companyId={company.id}
+        roles={company.roles ?? []}
+        canManage={canSetStatus}
+        onChanged={refresh}
+        onInterviewQs={(title) => {
+          setInterviewQsRole(title)
+          setShowInterviewQs(true)
+        }}
+      />
+
       {company.ai_profile && (
         <div className="bg-white rounded-xl border border-primary-200 p-5">
           <div className="flex items-center gap-2 mb-3">
@@ -254,7 +271,11 @@ export default function CompanyDetail() {
         />
       )}
       {showInterviewQs && (
-        <InterviewQuestionsModal company={company} onClose={() => setShowInterviewQs(false)} />
+        <InterviewQuestionsModal
+          company={company}
+          initialRole={interviewQsRole}
+          onClose={() => setShowInterviewQs(false)}
+        />
       )}
       {emailContact && (
         <DraftEmailModal company={company} contact={emailContact} onClose={() => setEmailContact(null)} />

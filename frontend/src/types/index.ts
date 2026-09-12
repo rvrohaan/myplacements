@@ -77,6 +77,40 @@ export interface Company {
   created_at: string
   updated_at: string
   hr_contacts: HRContact[]
+  roles: CompanyRole[]
+}
+
+export type CompanyRoleType = 'full_time' | 'internship' | 'internship_ppo' | 'contract' | 'apprenticeship'
+export type CompanyRoleStatus = 'open' | 'on_hold' | 'filled' | 'closed'
+
+/** A job role / offer the company recruits for — its standing catalogue, which
+ *  outlives any one campus drive. */
+export interface CompanyRole {
+  id: number
+  company_id: number
+  title: string
+  role_type: CompanyRoleType
+  status: CompanyRoleStatus
+  /** Annual package, in LPA. */
+  ctc_min?: number
+  ctc_max?: number
+  /** Monthly stipend in rupees — internships only, a different unit from ctc_*. */
+  stipend?: number
+  openings?: number
+  location?: string
+  work_mode?: string
+  eligible_branches?: string
+  min_cgpa?: number
+  max_backlogs?: number
+  skills?: string
+  job_description?: string
+  apply_deadline?: string
+  posting_url?: string
+  notes?: string
+  created_by_id?: number
+  created_by_name?: string
+  created_at: string
+  updated_at: string
 }
 
 export interface HRContact {

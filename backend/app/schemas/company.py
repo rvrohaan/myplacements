@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from app.models.company import CompanyStatus
+from app.models.company import ROLE_STATUSES, ROLE_TYPES, CompanyStatus
 
 
 class HRContactBase(BaseModel):
@@ -28,6 +28,81 @@ class HRContactOut(HRContactBase):
     response_status: Optional[str] = None
     last_contacted_at: Optional[datetime] = None
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CompanyRoleBase(BaseModel):
+    """A job role the company recruits for. Everything but the title is optional:
+    a role is usually first written down the moment HR mentions it, long before
+    the package or the eligibility bar is settled."""
+
+    title: str
+    role_type: str = "full_time"
+    status: str = "open"
+    ctc_min: Optional[float] = None
+    ctc_max: Optional[float] = None
+    stipend: Optional[float] = None
+    openings: Optional[int] = None
+    location: Optional[str] = None
+    work_mode: Optional[str] = None
+    eligible_branches: Optional[str] = None
+    min_cgpa: Optional[float] = None
+    max_backlogs: Optional[int] = None
+    skills: Optional[str] = None
+    job_description: Optional[str] = None
+    apply_deadline: Optional[datetime] = None
+    posting_url: Optional[str] = None
+    notes: Optional[str] = None
+
+    @field_validator("role_type")
+    @classmethod
+    def _check_type(cls, value: str) -> str:
+        if value not in ROLE_TYPES:
+            raise ValueError(f"role_type must be one of: {', '.join(ROLE_TYPES)}")
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def _check_status(cls, value: str) -> str:
+        if value not in ROLE_STATUSES:
+            raise ValueError(f"status must be one of: {', '.join(ROLE_STATUSES)}")
+        return value
+
+
+class CompanyRoleCreate(CompanyRoleBase):
+    pass
+
+
+class CompanyRoleUpdate(CompanyRoleBase):
+    # Every field optional on edit; only what's sent is applied.
+    title: Optional[str] = None
+    role_type: Optional[str] = None
+    status: Optional[str] = None
+
+    @field_validator("role_type")
+    @classmethod
+    def _check_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in ROLE_TYPES:
+            raise ValueError(f"role_type must be one of: {', '.join(ROLE_TYPES)}")
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def _check_status(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in ROLE_STATUSES:
+            raise ValueError(f"status must be one of: {', '.join(ROLE_STATUSES)}")
+        return value
+
+
+class CompanyRoleOut(CompanyRoleBase):
+    id: int
+    company_id: int
+    created_by_id: Optional[int] = None
+    created_by_name: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True
@@ -104,6 +179,7 @@ class CompanyOut(CompanyBase):
     created_at: datetime
     updated_at: datetime
     hr_contacts: list[HRContactOut] = []
+    roles: list[CompanyRoleOut] = []
 
     class Config:
         from_attributes = True

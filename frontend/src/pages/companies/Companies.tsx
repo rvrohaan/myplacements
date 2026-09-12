@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Search, ExternalLink, CheckCircle2, XCircle, UserRound, Sparkles, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { Plus, Search, ExternalLink, CheckCircle2, XCircle, UserRound, Sparkles, Briefcase, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import type { Company, CompanyStatus, UserRole } from '@/types'
@@ -71,6 +71,15 @@ function storedSorting(): Sorting {
     // Storage disabled or holding something we didn't write - use the default.
   }
   return DEFAULT_SORTING
+}
+
+/** "3 roles · 2 open" for the list row, or null when none are recorded. */
+function rolesSummary(company: Company): string | null {
+  const total = company.roles?.length ?? 0
+  if (!total) return null
+  const open = company.roles.filter((r) => r.status === 'open').length
+  const label = `${total} role${total === 1 ? '' : 's'}`
+  return open ? `${label} · ${open} open` : label
 }
 
 const STATUS_OPTIONS: { value: CompanyStatus | ''; label: string }[] = [
@@ -388,6 +397,11 @@ export default function Companies() {
                     {canManage && c.created_by_name && (
                       <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
                         <UserRound className="w-3 h-3" /> Added by {c.created_by_name}
+                      </p>
+                    )}
+                    {rolesSummary(c) && (
+                      <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
+                        <Briefcase className="w-3 h-3" /> {rolesSummary(c)}
                       </p>
                     )}
                     {c.notes && (

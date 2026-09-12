@@ -1,7 +1,7 @@
 from app.models.college import College
 from app.models.user import User, UserRole
 from app.models.invite import UserInvite, InvitePurpose
-from app.models.company import Company, HRContact, CompanyStatus
+from app.models.company import Company, CompanyRole, HRContact, CompanyStatus, ROLE_STATUSES, ROLE_TYPES
 from app.models.student import Student, PlacementStatus, RiskCategory
 from app.models.officer import PlacementOfficer, CompanyAssignment
 from app.models.drive import Drive, DriveParticipant, DriveRound, DriveRoundResult, DriveMode, DriveStatus, ParticipantStatus
@@ -14,7 +14,7 @@ __all__ = [
     "College",
     "User", "UserRole",
     "UserInvite", "InvitePurpose",
-    "Company", "HRContact", "CompanyStatus",
+    "Company", "CompanyRole", "HRContact", "CompanyStatus", "ROLE_TYPES", "ROLE_STATUSES",
     "Student", "PlacementStatus", "RiskCategory",
     "PlacementOfficer", "CompanyAssignment",
     "Drive", "DriveParticipant", "DriveRound", "DriveRoundResult", "DriveMode", "DriveStatus", "ParticipantStatus",

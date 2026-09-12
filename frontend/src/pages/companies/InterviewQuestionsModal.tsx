@@ -11,13 +11,16 @@ const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E', 'F']
 
 export default function InterviewQuestionsModal({
   company,
+  initialRole = '',
   onClose,
 }: {
   company: Company
+  /** Prefills the role box — set when opened from a specific job role. */
+  initialRole?: string
   onClose: () => void
 }) {
   const [mode, setMode] = useState<Mode>('interview')
-  const [jobRole, setJobRole] = useState('')
+  const [jobRole, setJobRole] = useState(initialRole)
   const [questions, setQuestions] = useState<string[]>([])
   const [examQuestions, setExamQuestions] = useState<ExamQuestionItem[]>([])
   const [loading, setLoading] = useState(false)
