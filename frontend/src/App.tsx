@@ -18,6 +18,7 @@ import Communications from '@/pages/communications/Communications'
 import Training from '@/pages/training/Training'
 import DailyUpdate from '@/pages/daily/DailyUpdate'
 import DailyDigest from '@/pages/daily/DailyDigest'
+import Opportunities from '@/pages/opportunities/Opportunities'
 import People from '@/pages/people/People'
 import Colleges from '@/pages/colleges/Colleges'
 import SidebarPreview from '@/pages/SidebarPreview'
@@ -141,6 +142,9 @@ export default function App() {
             path="daily-digest"
             element={<CollegeRoute><AdminRoute><DailyDigest /></AdminRoute></CollegeRoute>}
           />
+          {/* Staff-wide: officers read the radar, leadership acts on it. The
+              action buttons are gated inside the page. */}
+          <Route path="opportunities" element={<CollegeRoute><Opportunities /></CollegeRoute>} />
           <Route path="analytics" element={<CollegeRoute><Analytics /></CollegeRoute>} />
           <Route
             path="people"

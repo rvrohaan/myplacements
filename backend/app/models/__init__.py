@@ -9,6 +9,8 @@ from app.models.offer import Offer, OfferStatus
 from app.models.communication import Communication, CommunicationType
 from app.models.training import TrainingModule, StudentTraining
 from app.models.daily_update import DailyUpdate, DailyUpdateRun
+from app.models.job_lead import JobLead, JobLeadScan, JobPosting
+from app.models.platform_setting import PlatformSetting, get_platform_settings
 
 __all__ = [
     "College",
@@ -22,4 +24,6 @@ __all__ = [
     "Communication", "CommunicationType",
     "TrainingModule", "StudentTraining",
     "DailyUpdate", "DailyUpdateRun",
+    "JobPosting", "JobLead", "JobLeadScan",
+    "PlatformSetting", "get_platform_settings",
 ]

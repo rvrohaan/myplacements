@@ -15,6 +15,26 @@ export function formatDate(dateStr?: string): string {
   return new Date(dateStr).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
+/**
+ * A backend timestamp as a local date and time.
+ *
+ * The API sends naive UTC ("2026-09-12T11:54:20.44") with no offset, which JS
+ * would otherwise read as local time and show four and a half hours early in
+ * IST. The trailing Z says what the string actually means.
+ */
+export function formatDateTime(ts?: string): string {
+  if (!ts) return 'N/A'
+  const iso = /[zZ]|[+-]\d{2}:?\d{2}$/.test(ts) ? ts : `${ts}Z`
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'N/A'
+  return d.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 export const STATUS_COLORS: Record<string, string> = {
   active: 'bg-green-100 text-green-700',
   priority: 'bg-blue-100 text-blue-700',

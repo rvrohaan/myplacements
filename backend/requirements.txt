@@ -9,7 +9,9 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==3.2.2
 python-multipart==0.0.9
-anthropic==0.28.0
+# Server-side web search (used by the opportunity scan) needs a modern SDK.
+# Stay on 0.x: 1.x swaps httpx for httpx2, which the pin below would fight.
+anthropic==0.125.0
 python-dotenv==1.0.1
 httpx==0.27.0
 openpyxl==3.1.2

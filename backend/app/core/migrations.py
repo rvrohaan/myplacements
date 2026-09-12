@@ -79,6 +79,131 @@ _MIGRATIONS = [
     "ON daily_updates (college_id, report_date)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_daily_update_runs "
     "ON daily_update_runs (college_id, report_date, kind)",
+    # Opportunity scan: the per-college switch and the free-text filter.
+    "ALTER TABLE colleges ADD COLUMN IF NOT EXISTS job_scan_enabled BOOLEAN NOT NULL DEFAULT TRUE",
+    "ALTER TABLE colleges ADD COLUMN IF NOT EXISTS job_scan_focus VARCHAR",
+    # Discovery moved from per-college leads to platform-wide postings: campus
+    # hiring is national, so one scan serves every tenant. These statements lift
+    # any leads written by the first shape into job_postings and leave job_leads
+    # holding only what a college decided. All no-ops once that has happened.
+    "ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS posting_id INTEGER REFERENCES job_postings(id)",
+    # Guarded on the old shape still being there, because the statements below
+    # drop the very columns this reads - without the guard the second startup
+    # would fail on a table that had already been migrated.
+    """DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'job_leads' AND column_name = 'dedupe_key'
+        ) THEN
+            INSERT INTO job_postings (
+                company_name, role_title, lead_type, location, work_mode, eligibility,
+                compensation, posted_at, posted_label, source_name, source_url, summary,
+                confidence, verified, dedupe_key, discovered_at, scan_id)
+            SELECT DISTINCT ON (dedupe_key)
+                company_name, role_title, lead_type, location, work_mode, eligibility,
+                compensation, posted_at, posted_label, source_name, source_url, summary,
+                confidence, COALESCE(verified, TRUE), dedupe_key, discovered_at, scan_id
+            FROM job_leads
+            WHERE dedupe_key IS NOT NULL
+            ORDER BY dedupe_key, id
+            ON CONFLICT (dedupe_key) DO NOTHING;
+
+            UPDATE job_leads l SET posting_id = p.id
+            FROM job_postings p
+            WHERE p.dedupe_key = l.dedupe_key AND l.posting_id IS NULL;
+
+            -- An untouched lead is now expressed by having no row at all.
+            DELETE FROM job_leads WHERE status = 'new';
+        END IF;
+    END $$;""",
+    "DELETE FROM job_leads WHERE posting_id IS NULL",
+    "ALTER TABLE job_leads ALTER COLUMN posting_id SET NOT NULL",
+    # The posting's own fields now live on job_postings only.
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS company_name",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS role_title",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS lead_type",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS location",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS work_mode",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS eligibility",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS compensation",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS posted_at",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS posted_label",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS source_name",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS source_url",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS summary",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS confidence",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS verified",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS discovered_at",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS scan_id",
+    "ALTER TABLE job_leads DROP COLUMN IF EXISTS dedupe_key",
+    "DROP INDEX IF EXISTS uq_job_leads_key",
+    "DROP INDEX IF EXISTS ix_job_leads_college_status",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_job_leads_college_posting "
+    "ON job_leads (college_id, posting_id)",
+    # The dedupe key stopped including the source URL: the same opening listed on
+    # a careers page and on three aggregators was four rows, and four cards to
+    # read before you worked out they were one job. Collapse those, keeping the
+    # earliest row, then rewrite every key to the new employer|role form. Both
+    # halves are no-ops once they have run.
+    r"""DO $$
+    BEGIN
+        -- Mirrors app.services.job_scan.posting_key: employer + role, with the
+        -- requisition numbers that vary between sources stripped out. It only
+        -- has to be close enough to merge what is already stored - from here on
+        -- the Python side recomputes keys from the columns when it dedupes.
+        CREATE TEMP TABLE _pk ON COMMIT DROP AS
+        WITH cleaned AS (
+            SELECT id,
+                   trim(regexp_replace(lower(coalesce(company_name, '')), '[^a-z0-9]+', ' ', 'g')) AS c,
+                   trim(regexp_replace(
+                       regexp_replace(
+                           regexp_replace(lower(coalesce(role_title, '')),
+                                          '[([][^)\]]*[0-9][^)\]]*[)\]]', ' ', 'g'),
+                           '[^a-z0-9]+', ' ', 'g'),
+                       '(^| )([0-9]+|job|jobid|req|reqid|requisition|id|ref|code)( |$)', ' ', 'g')) AS r,
+                   lower(coalesce(source_url, '')) AS u
+            FROM job_postings
+        ), tidied AS (
+            SELECT id, c, u,
+                   trim(regexp_replace(
+                       regexp_replace(r, '(^| )([0-9]+|job|jobid|req|reqid|requisition|id|ref|code)( |$)', ' ', 'g'),
+                       ' +', ' ', 'g')) AS r
+            FROM cleaned
+        )
+        SELECT id, c || '|' || CASE WHEN r = '' THEN 'url:' || u ELSE r END AS k
+        FROM tidied;
+
+        CREATE TEMP TABLE _keep ON COMMIT DROP AS
+        SELECT k, MIN(id) AS keep_id FROM _pk GROUP BY k;
+
+        -- A college that decided on both copies keeps its decision on the survivor.
+        DELETE FROM job_leads l
+        USING _pk p, _keep s
+        WHERE l.posting_id = p.id AND s.k = p.k AND p.id <> s.keep_id
+          AND EXISTS (
+            SELECT 1 FROM job_leads o
+            WHERE o.college_id = l.college_id AND o.posting_id = s.keep_id
+          );
+
+        UPDATE job_leads l SET posting_id = s.keep_id
+        FROM _pk p, _keep s
+        WHERE l.posting_id = p.id AND s.k = p.k AND p.id <> s.keep_id;
+
+        DELETE FROM job_postings d
+        USING _pk p, _keep s
+        WHERE d.id = p.id AND s.k = p.k AND p.id <> s.keep_id;
+
+        UPDATE job_postings d SET dedupe_key = p.k
+        FROM _pk p
+        WHERE d.id = p.id AND d.dedupe_key IS DISTINCT FROM p.k;
+    END $$;""",
+    # One *scheduled* scan per day for the whole platform. Partial on purpose: a
+    # person clicking Scan now (triggered_by_id set) is outside it.
+    "DROP INDEX IF EXISTS uq_job_lead_scans_cron",
+    "ALTER TABLE job_lead_scans ALTER COLUMN college_id DROP NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_job_lead_scans_daily "
+    "ON job_lead_scans (scan_date) WHERE triggered_by_id IS NULL",
 ]
 
 # New values for existing native enum types. Stored labels are the enum *member

@@ -678,3 +678,76 @@ export interface DailyUpdateSettings {
   daily_update_cutoff: string
   daily_update_enabled: boolean
 }
+
+// --- Opportunity radar (web-discovered openings) ----------------------------
+// One opening, as this college sees it: the posting is shared platform-wide,
+// the status is this college's own decision about it ('new' = not yet decided).
+
+export type LeadType = 'job' | 'internship'
+export type LeadStatus = 'new' | 'added' | 'dismissed'
+
+export interface JobLead {
+  /** The shared posting's id - what the action endpoints take. */
+  id: number
+  company_name: string
+  role_title?: string | null
+  lead_type: LeadType
+  location?: string | null
+  work_mode?: string | null
+  eligibility?: string | null
+  compensation?: string | null
+  posted_at?: string | null
+  posted_label?: string | null
+  source_name?: string | null
+  source_url?: string | null
+  summary?: string | null
+  confidence?: 'high' | 'medium' | 'low' | null
+  /** False when the scan's link never appeared in a search result. */
+  verified: boolean
+  discovered_at?: string | null
+  status: LeadStatus
+  company_id?: number | null
+  dismiss_reason?: string | null
+  actioned_by_name?: string | null
+  actioned_at?: string | null
+  /** A company of the same name already on the list, if there is one. */
+  existing_company_id?: number | null
+  existing_company_name?: string | null
+}
+
+export interface JobScan {
+  id: number
+  scan_date: string
+  started_at?: string | null
+  finished_at?: string | null
+  /** 'stalled' = claimed but never finished; a restart took its background task. */
+  status: 'ok' | 'failed' | 'stalled'
+  found: number
+  new_count: number
+  error?: string | null
+  triggered_by_name?: string | null
+}
+
+export interface JobLeadSummary {
+  enabled: boolean
+  /** Whether the scan runs by itself each morning. Platform-wide, off by default. */
+  schedule_enabled: boolean
+  new_24h: number
+  new_total: number
+  last_scan?: JobScan | null
+  top: JobLead[]
+}
+
+export interface JobScanResult {
+  found: number
+  new_count: number
+  scan: JobScan
+}
+
+export interface JobScanSettings {
+  job_scan_enabled: boolean
+  job_scan_focus?: string | null
+  /** The platform's daily-scan switch: shared by every college, super_admin only. */
+  schedule_enabled: boolean
+  can_manage_schedule: boolean
+}

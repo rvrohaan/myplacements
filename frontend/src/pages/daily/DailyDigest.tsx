@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
-  Bell,
-  CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -11,9 +8,6 @@ import {
   Clock,
   FileCheck2,
   Settings2,
-  Sparkles,
-  TrendingDown,
-  TrendingUp,
   UserX,
 } from 'lucide-react'
 import {
@@ -32,7 +26,15 @@ import { useToast } from '@/components/ui/toast'
 import { Modal, ModalCancelButton, ModalClose, ModalTitle } from '@/components/ui/modal'
 import { Field, inputClass } from '@/components/ui/field'
 import { StatCard, DashboardSkeleton, Panel } from '@/pages/dashboard/StatCard'
-import { formatDate } from '@/lib/utils'
+import {
+  Delta,
+  EscalationCard,
+  NotFiledList,
+  StandingChip,
+  TOTAL_LABELS,
+  useDigestActions,
+} from './digestParts'
+import { formatDate, formatDateTime } from '@/lib/utils'
 import type { DailyDigest as DailyDigestData, DailyUpdate } from '@/types'
 
 const CHART_TOOLTIP = {
@@ -55,33 +57,6 @@ function shiftDate(iso: string, days: number): string {
   return isoDate(next)
 }
 
-const TOTAL_LABELS: Array<[keyof DailyDigestData['totals'], string]> = [
-  ['calls', 'Calls'],
-  ['meetings', 'Meetings'],
-  ['companies_touched', 'Companies touched'],
-  ['new_companies', 'New companies'],
-  ['drives_conducted', 'Drives run'],
-  ['offers', 'Offers'],
-]
-
-/** Today against the trailing average, so the number has somewhere to stand. */
-function Delta({ value, baseline }: { value: number; baseline: number }) {
-  const diff = value - baseline
-  if (!baseline && !value) return <span className="text-xs text-gray-400">&mdash;</span>
-  if (Math.abs(diff) < 0.5) {
-    return <span className="text-xs text-gray-400">same as usual</span>
-  }
-  const up = diff > 0
-  const Icon = up ? TrendingUp : TrendingDown
-  return (
-    <span className={`inline-flex items-center gap-1 text-xs ${up ? 'text-teal-600' : 'text-amber-600'}`}>
-      <Icon className="w-3 h-3" aria-hidden="true" />
-      {up ? '+' : ''}
-      {diff.toFixed(diff % 1 === 0 ? 0 : 1)} vs avg
-    </span>
-  )
-}
-
 /** Which slice of the day the compliance cards have drilled into. */
 type Slice = 'filed' | 'on_time' | 'late' | 'not_filed'
 
@@ -102,15 +77,23 @@ export default function DailyDigest() {
   const [slice, setSlice] = useState<Slice | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const load = (forDate: string) => {
-    setLoading(true)
+  /**
+   * `silent` re-reads the day without swapping the page for the skeleton. Reply
+   * and acknowledge do this: replacing the whole page for a one-row change loses
+   * the reader's scroll position, so answering an update halfway down the list
+   * would throw them back to the top.
+   */
+  const load = (forDate: string, silent = false) => {
+    if (!silent) setLoading(true)
     api
       .get('/daily-updates/digest', { params: { date: forDate } })
       .then((r) => setDigest(r.data))
       .catch((err) =>
         toast.error(err?.response?.data?.detail ?? 'Could not load the digest.'),
       )
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!silent) setLoading(false)
+      })
   }
 
   useEffect(() => {
@@ -135,25 +118,7 @@ export default function DailyDigest() {
     )
   }
 
-  const remind = async (userId: number, name: string) => {
-    try {
-      const r = await api.post(`/daily-updates/remind/${userId}`)
-      if (r.data?.email_status === 'sent') toast.success(`Reminder sent to ${name}.`)
-      else toast.info(`No email could be sent to ${name} — check their address or the mail setup.`)
-    } catch (err: any) {
-      toast.error(err?.response?.data?.detail ?? 'Could not send the reminder.')
-    }
-  }
-
-  const review = async (updateId: number, note: string | null) => {
-    try {
-      await api.post(`/daily-updates/${updateId}/review`, { note })
-      toast.success(note ? 'Reply sent.' : 'Marked as seen.')
-      load(date)
-    } catch (err: any) {
-      toast.error(err?.response?.data?.detail ?? 'Could not save your response.')
-    }
-  }
+  const { remind, review } = useDigestActions(() => load(date, true))
 
   if (loading || !digest) return <DashboardSkeleton cards={4} panels={2} />
 
@@ -401,182 +366,6 @@ export default function DailyDigest() {
   )
 }
 
-function NotFiledList({
-  people,
-  onRemind,
-}: {
-  people: DailyDigestData['attention']['not_filed']
-  onRemind: (userId: number, name: string) => void
-}) {
-  if (people.length === 0) {
-    return <p className="text-sm text-gray-500">Everyone has filed.</p>
-  }
-  return (
-    <ul className="flex flex-wrap gap-2">
-      {people.map((person) => (
-        <li
-          key={person.user_id}
-          className="inline-flex items-center gap-2 text-sm bg-rose-50 border border-rose-200 text-rose-800 rounded-lg pl-3 pr-1.5 py-1"
-        >
-          {person.name}
-          <button
-            type="button"
-            onClick={() => onRemind(person.user_id, person.name)}
-            className="inline-flex items-center gap-1 text-xs font-medium text-rose-700 hover:text-rose-900 hover:bg-rose-100 px-2 py-1 rounded"
-          >
-            <Bell className="w-3 h-3" aria-hidden="true" />
-            Remind
-          </button>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function StandingChip({ to, label, count }: { to: string; label: string; count: number }) {
-  if (!count) return null
-  return (
-    <Link
-      to={to}
-      className="inline-flex items-center gap-1.5 text-xs bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 rounded-lg px-2.5 py-1.5"
-    >
-      <span className="font-semibold tabular-nums">{count}</span> {label}
-    </Link>
-  )
-}
-
-function EscalationCard({
-  item,
-  onReview,
-}: {
-  item: DailyDigestData['attention']['escalations'][number]
-  onReview: (id: number, note: string | null) => void
-}) {
-  const [replying, setReplying] = useState(false)
-  const [note, setNote] = useState('')
-  // A draft of the reply, written from this escalation. Shown as ghost text in
-  // the empty box; Tab or the button below accepts it. Null means there is none
-  // to offer - no API key, a model hiccup - and the box is simply empty.
-  const [suggestion, setSuggestion] = useState<string | null>(null)
-  const [drafting, setDrafting] = useState(false)
-  const boxRef = useRef<HTMLTextAreaElement>(null)
-  const drafted = useRef(false)
-
-  const startReply = () => {
-    setReplying(true)
-    // Drafting costs an API call, so ask once per card: cancelling and reopening
-    // the box reuses the draft already fetched rather than paying for it again.
-    if (drafted.current) return
-    drafted.current = true
-    setDrafting(true)
-    api
-      .post(`/daily-updates/${item.update_id}/suggest-reply`)
-      .then((r) => setSuggestion(r.data?.suggestion ?? null))
-      .catch(() => setSuggestion(null))
-      .finally(() => setDrafting(false))
-  }
-
-  const acceptSuggestion = () => {
-    if (!suggestion) return
-    setNote(suggestion)
-    boxRef.current?.focus()
-  }
-
-  // Tab accepts the draft only while the box is still empty, so once there is
-  // anything to send Tab goes back to doing what it should and reaches the Send
-  // button. The button below does the same thing for anyone not using Tab.
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Tab' || e.shiftKey || note !== '' || !suggestion) return
-    e.preventDefault()
-    acceptSuggestion()
-  }
-
-  const placeholder = drafting
-    ? 'Drafting a suggestion…'
-    : suggestion ?? `Reply to ${item.name ?? 'this update'}…`
-
-  return (
-    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-      <p className="text-sm font-semibold text-amber-900 flex items-center gap-1.5">
-        <AlertTriangle className="w-4 h-4" aria-hidden="true" />
-        {item.name ?? 'Unknown'}
-      </p>
-      <p className="mt-1 text-sm text-amber-900">{item.escalation_note}</p>
-      {item.reviewed ? (
-        <p className="mt-2 text-xs text-amber-700 inline-flex items-center gap-1">
-          <CheckCircle2 className="w-3 h-3" aria-hidden="true" /> Acknowledged
-        </p>
-      ) : replying ? (
-        <div className="mt-2 space-y-2">
-          <textarea
-            ref={boxRef}
-            rows={2}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            onKeyDown={onKeyDown}
-            autoFocus
-            placeholder={placeholder}
-            aria-describedby={suggestion && !note ? `suggest-${item.update_id}` : undefined}
-            className="w-full text-sm border border-amber-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-          />
-          {suggestion && !note && (
-            <button
-              type="button"
-              id={`suggest-${item.update_id}`}
-              onClick={acceptSuggestion}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 bg-white border border-amber-300 hover:bg-amber-100 px-2.5 py-1 rounded-lg"
-            >
-              <Sparkles className="w-3 h-3" aria-hidden="true" />
-              Use this draft
-              <kbd className="ml-0.5 px-1 py-px font-sans text-[10px] border border-amber-300 rounded bg-amber-50">
-                Tab
-              </kbd>
-            </button>
-          )}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => onReview(item.update_id, note.trim() || null)}
-              className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium px-3 py-1.5 rounded-lg"
-            >
-              Send reply
-            </button>
-            <button
-              type="button"
-              onClick={() => setReplying(false)}
-              className="text-xs font-medium text-amber-800 hover:bg-amber-100 px-3 py-1.5 rounded-lg"
-            >
-              Cancel
-            </button>
-          </div>
-          {suggestion && (
-            <p className="text-[11px] text-amber-700/80">
-              Drafted for you — read it before sending.
-            </p>
-          )}
-        </div>
-      ) : (
-        <div className="mt-2 flex gap-2">
-          <button
-            type="button"
-            onClick={() => onReview(item.update_id, null)}
-            className="text-xs font-medium text-amber-800 bg-white border border-amber-300 hover:bg-amber-100 px-3 py-1.5 rounded-lg"
-          >
-            Acknowledge
-          </button>
-          <button
-            type="button"
-            onClick={startReply}
-            className="text-xs font-medium text-amber-800 hover:bg-amber-100 px-3 py-1.5 rounded-lg"
-          >
-            Reply
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 function UpdateRow({
   update,
   open,
@@ -682,22 +471,39 @@ function UpdateRow({
           )}
 
           {update.can_review && !update.review_note && (
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <input
-                type="text"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Reply to this update (optional)"
-                className="flex-1 min-w-[200px] text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500"
-              />
-              <button
-                type="button"
-                onClick={() => onReview(update.id, note.trim() || null)}
-                className="text-xs font-medium text-white bg-primary-600 hover:bg-primary-700 px-3 py-1.5 rounded-lg"
-              >
-                {note.trim() ? 'Send reply' : update.reviewed_at ? 'Seen' : 'Mark seen'}
-              </button>
-            </div>
+            <>
+              {/* Say plainly that this one has been acknowledged, and by whom.
+                  Without it the only trace after a reload is the small tick in
+                  the header, and the row reads as though the click never took. */}
+              {update.reviewed_at && (
+                <p className="inline-flex items-center gap-1.5 text-xs font-medium text-teal-700">
+                  <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  Seen by {update.reviewed_by_name ?? 'you'} · {formatDateTime(update.reviewed_at)}
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <input
+                  type="text"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder={
+                    update.reviewed_at ? 'Add a reply (optional)' : 'Reply to this update (optional)'
+                  }
+                  className="flex-1 min-w-[200px] text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+                <button
+                  type="button"
+                  // Once it is seen, the only thing left to send is a reply -
+                  // so an empty box has nothing to do rather than re-stamping
+                  // the acknowledgement it already carries.
+                  disabled={!!update.reviewed_at && !note.trim()}
+                  onClick={() => onReview(update.id, note.trim() || null)}
+                  className="text-xs font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:bg-gray-200 disabled:text-gray-400 px-3 py-1.5 rounded-lg"
+                >
+                  {note.trim() || update.reviewed_at ? 'Send reply' : 'Mark seen'}
+                </button>
+              </div>
+            </>
           )}
         </div>
       )}

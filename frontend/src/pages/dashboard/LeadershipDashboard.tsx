@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -7,7 +7,6 @@ import {
   Building2,
   Clock,
   MessageSquare,
-  ClipboardCheck,
   Table2,
   Target,
   UserCheck,
@@ -30,10 +29,13 @@ import api from '@/lib/api'
 import type {
   ActivityStatus,
   DailyDigest,
+  JobLeadSummary,
   OfficerPerformance,
   OfficerPerformanceReport,
 } from '@/types'
 import { cn, formatCTC, formatDate } from '@/lib/utils'
+import DigestPanel from './DigestPanel'
+import OpportunitiesPanel from './OpportunitiesPanel'
 import { DashboardSkeleton, Panel, StatCard } from './StatCard'
 
 // How an officer's last logged activity reads at a glance.
@@ -94,20 +96,30 @@ export default function LeadershipDashboard() {
   const [sortKey, setSortKey] = useState<SortKey>('offers_won')
   const [view, setView] = useState<View>('chart')
   const [metric, setMetric] = useState<Metric>('work')
-  // Today's filing compliance, for the chip through to the digest. Failure is
-  // silent - the dashboard stands on its own without it.
+  // Today's digest, shown in full at the top of the page. Failure is silent -
+  // the dashboard stands on its own without it.
   const [digest, setDigest] = useState<DailyDigest | null>(null)
+  // What the market did, next to what the team did. Same silent failure.
+  const [leads, setLeads] = useState<JobLeadSummary | null>(null)
+
+  const loadDigest = useCallback(() => {
+    api
+      .get('/daily-updates/digest')
+      .then((r) => setDigest(r.data))
+      .catch(() => setDigest(null))
+  }, [])
 
   useEffect(() => {
     api
       .get('/analytics/officer-performance')
       .then((r) => setReport(r.data))
       .finally(() => setLoading(false))
+    loadDigest()
     api
-      .get('/daily-updates/digest')
-      .then((r) => setDigest(r.data))
-      .catch(() => setDigest(null))
-  }, [])
+      .get('/job-leads/summary')
+      .then((r) => setLeads(r.data))
+      .catch(() => setLeads(null))
+  }, [loadDigest])
 
   const officers = useMemo(() => {
     const rows = [...(report?.officers ?? [])]
@@ -157,6 +169,17 @@ export default function LeadershipDashboard() {
           How each placement officer is tracking against their allocations and targets.
         </p>
       </div>
+
+      {/* Today's news leads: what the team reported, and what is waiting on this
+          reader. A college with nobody expected to file gets nothing here rather
+          than an empty "0/0" panel. */}
+      {digest && digest.enabled && digest.compliance.expected > 0 && (
+        <DigestPanel digest={digest} reload={loadDigest} />
+      )}
+
+      {/* Openings the scan turned up. Hidden entirely when there is nothing
+          waiting - an empty radar is not news. */}
+      {leads && leads.enabled && leads.new_total > 0 && <OpportunitiesPanel summary={leads} />}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -220,26 +243,6 @@ export default function LeadershipDashboard() {
               <AlertTriangle className="w-4 h-4" />
               {totals.needs_attention} officer{totals.needs_attention === 1 ? '' : 's'} logged nothing in 30 days
             </span>
-          )}
-          {digest && digest.compliance.expected > 0 && (
-            <Link
-              to="/daily-digest"
-              className={cn(
-                'flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors',
-                digest.compliance.missing
-                  ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
-                  : 'border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100',
-              )}
-            >
-              <ClipboardCheck className="w-4 h-4" />
-              {digest.compliance.filed}/{digest.compliance.expected} daily updates filed today
-              {!!digest.attention.escalations.length && (
-                <span className="font-medium">
-                  &middot; {digest.attention.escalations.length} escalation
-                  {digest.attention.escalations.length === 1 ? '' : 's'}
-                </span>
-              )}
-            </Link>
           )}
         </div>
       )}

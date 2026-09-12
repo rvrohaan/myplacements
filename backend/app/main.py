@@ -17,6 +17,7 @@ from app.routers import (
     companies,
     daily_updates,
     drives,
+    job_leads,
     officers,
     portal,
     students,
@@ -55,6 +56,7 @@ app.include_router(drives.router, prefix="/api")
 app.include_router(officers.router, prefix="/api")
 app.include_router(communications.router, prefix="/api")
 app.include_router(daily_updates.router, prefix="/api")
+app.include_router(job_leads.router, prefix="/api")
 app.include_router(training.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
 app.include_router(portal.router, prefix="/api")

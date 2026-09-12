@@ -17,6 +17,7 @@ import {
   Users,
   ClipboardCheck,
   Newspaper,
+  Radar,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Link, useLocation } from "react-router-dom";
@@ -91,6 +92,7 @@ const navItems = [
   // filerOnly: the people who owe a daily update. leadershipOnly: who reads them.
   { to: "/daily-update", icon: ClipboardCheck, label: "Daily Update", filerOnly: true },
   { to: "/daily-digest", icon: Newspaper, label: "Daily Digest", leadershipOnly: true },
+  { to: "/opportunities", icon: Radar, label: "Opportunities" },
   { to: "/training", icon: BookOpen, label: "Training" },
   { to: "/analytics", icon: BarChart3, label: "Analytics" },
   { to: "/people", icon: Users, label: "People", adminOnly: true },

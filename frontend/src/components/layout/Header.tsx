@@ -12,6 +12,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/training': 'Training Monitoring',
   '/daily-update': 'Daily Update',
   '/daily-digest': 'Daily Digest',
+  '/opportunities': 'Opportunity Radar',
   '/analytics': 'Analytics',
   '/people': 'People',
   '/colleges': 'Colleges',
