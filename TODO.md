@@ -150,7 +150,33 @@ Currently built: overview, branch-wise, CTC distribution, drive funnel.
 - [~] **Module 10 — Offer & Joining Tracking** (extend): drive selection now auto-creates an
   accepted, drive-linked offer (2026-06-19). Remaining: joining date, multiple-offer view,
   dropout reasons, consolidated offers screen
-- [ ] **Module 2 — HR Contact Management** (extend): dedicated HR view, relationship score, last-contacted-by, next action
+- [x] **Module 2 — HR Contact Management** (2026-09-12): HR contacts were create-only
+  (no edit, no delete) and their list/add endpoints skipped the tenant check, so any
+  signed-in user could read another college's contacts by id — both fixed.
+  - Backend: `PUT`/`DELETE /companies/{id}/hr-contacts/{hr_id}`, both behind
+    `_accessible_company` (officers reach only their allocated companies) as list/add
+    now are. Delete **detaches** logged communications (`hr_contact_id → NULL`) rather
+    than deleting them, so outreach history and officer attribution survive.
+  - **Dedicated HR view** at `/hr-contacts` (`routers/hr_contacts.py`): every contact
+    across companies, with search, company/region filters, follow-up buckets
+    (due/overdue/upcoming/none) and six sorts; `X-Total-Count` pagination; a summary
+    strip (overdue / due this week / no follow-up / never contacted) whose tiles are
+    also filters. Officer-scoped the same way as the rest of the app.
+  - **Relationship score, two halves shown side by side**: `relationship_strength`
+    (1–5) stays the officer's own judgement, now actually editable via a labelled
+    picker; `services/hr_engagement.py` computes the evidence-based counterpart from
+    the communication log (responsiveness / recency / consistency / follow-up
+    reliability → 0–100 + band). No logged history scores `None` ("no history"), not 0;
+    a relationship with no contact inside 6 months is capped below "warm" however good
+    its history, so a dead contact can't read as warm on the strength of old replies.
+  - **last-contacted-by** derived from the latest communication's author (not stored,
+    so it can't go stale); **next action** is a new `hr_contacts.next_action` column
+    saying *what* we owe them, next to `next_followup_date`'s *when*.
+  - Frontend: `pages/hr/HRContacts.tsx`; `AddHRContactModal` → `HRContactModal`
+    (one component for add + edit); `HRContactsPanel` replaces the read-only inline
+    list on Company Detail, with edit/delete/strength per contact.
+  - Migration: `next_action`, `updated_at` (+ backfill), `relationship_strength` NULL
+    backfill, and a partial index on `communications.hr_contact_id`.
 - [~] **Role dashboards (§6)**: ~~Student~~ done (student portal dashboard, 2026-06-19);
   remaining: Principal, Pro Chancellor, Deputy Pro Chancellor, Officer, Department, Company, Training, Offer, AI Insights
 - [ ] **Reports (§7)**: officer follow-up, company conversion, branch-wise, student readiness, training effectiveness, CTC analysis, unplaced-risk, HR communication, monthly progress, **NBA/NAAC/NIRF evidence report**

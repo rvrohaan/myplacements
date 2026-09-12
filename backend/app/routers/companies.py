@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_roles
+from app.models.communication import Communication
 from app.models.company import Company, CompanyRole, CompanyStatus, HRContact
 from app.models.officer import CompanyAssignment, PlacementOfficer
 from app.models.user import User, UserRole
@@ -26,6 +27,7 @@ from app.schemas.company import (
     ExamQuestionsResponse,
     HRContactBase,
     HRContactOut,
+    HRContactUpdate,
     InterviewQuestionsRequest,
     InterviewQuestionsResponse,
 )
@@ -35,6 +37,7 @@ from app.services.ai_service import (
     generate_exam_questions,
     generate_interview_questions,
 )
+from app.services import notify
 from app.services.excel_io import XLSX_MEDIA_TYPE, Column, build_workbook, parse_rows
 
 router = APIRouter(prefix="/companies", tags=["companies"])
@@ -242,8 +245,10 @@ def create_company(payload: CompanyCreate, db: Session = Depends(get_db), curren
         officer = db.query(PlacementOfficer).filter(PlacementOfficer.user_id == current_user.id).first()
         if officer:
             db.add(CompanyAssignment(officer_id=officer.id, company_id=company.id, status="active"))
-            db.commit()
-            db.refresh(company)
+        # The lead now sits in the heads' review queue - tell them it is there.
+        notify.company_review_pending(db, company=company, actor=current_user)
+        db.commit()
+        db.refresh(company)
     return company
 
 
@@ -404,6 +409,7 @@ def approve_company(
     """Approve an officer-sourced lead so it becomes an official company."""
     company = _get_reviewable_company(company_id, db, current_user)
     company.review_status = "approved"
+    notify.company_approved(db, company=company, actor=current_user)
     db.commit()
     db.refresh(company)
     return company
@@ -419,6 +425,7 @@ def decline_company(
     no longer work on it; the record is kept for the head's reference."""
     company = _get_reviewable_company(company_id, db, current_user)
     company.review_status = "declined"
+    notify.company_declined(db, company=company, reason=None, actor=current_user)
     db.query(CompanyAssignment).filter(CompanyAssignment.company_id == company.id).delete()
     db.commit()
     db.refresh(company)
@@ -462,21 +469,82 @@ async def generate_ai_profile(company_id: int, db: Session = Depends(get_db), _:
 
 
 @router.get("/{company_id}/hr-contacts", response_model=list[HRContactOut])
-def list_hr_contacts(company_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    return db.query(HRContact).filter(HRContact.company_id == company_id).all()
+def list_hr_contacts(
+    company_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    company = _accessible_company(company_id, db, current_user)
+    return (
+        db.query(HRContact)
+        .filter(HRContact.company_id == company.id)
+        .order_by(HRContact.created_at.asc(), HRContact.id.asc())
+        .all()
+    )
 
 
 @router.post("/{company_id}/hr-contacts", response_model=HRContactOut, status_code=201)
 def add_hr_contact(
-    company_id: int, payload: HRContactBase, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+    company_id: int,
+    payload: HRContactBase,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    if not db.query(Company).filter(Company.id == company_id).first():
-        raise HTTPException(status_code=404, detail="Company not found")
-    contact = HRContact(**payload.model_dump(), company_id=company_id)
+    company = _accessible_company(company_id, db, current_user)
+    contact = HRContact(**payload.model_dump(), company_id=company.id)
     db.add(contact)
     db.commit()
     db.refresh(contact)
     return contact
+
+
+def _get_hr_contact(company_id: int, hr_id: int, db: Session, current_user: User) -> HRContact:
+    _accessible_company(company_id, db, current_user)
+    contact = (
+        db.query(HRContact)
+        .filter(HRContact.id == hr_id, HRContact.company_id == company_id)
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="HR contact not found")
+    return contact
+
+
+@router.put("/{company_id}/hr-contacts/{hr_id}", response_model=HRContactOut)
+def update_hr_contact(
+    company_id: int,
+    hr_id: int,
+    payload: HRContactUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Patch a contact. Only the fields present in the request are touched, so
+    setting a next action from the directory doesn't blank the notes - but an
+    explicit null does clear a field, which is how a follow-up date is removed."""
+    contact = _get_hr_contact(company_id, hr_id, db, current_user)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        # name and the rating are not nullable - ignore a null rather than
+        # writing one and leaving a nameless row in the directory.
+        if value is None and field in ("name", "relationship_strength"):
+            continue
+        setattr(contact, field, value)
+    db.commit()
+    db.refresh(contact)
+    return contact
+
+
+@router.delete("/{company_id}/hr-contacts/{hr_id}", status_code=204)
+def delete_hr_contact(
+    company_id: int, hr_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    """Remove a contact. Communications logged against them are kept and
+    detached rather than deleted: the outreach still happened, it still counts
+    towards the officer who did it, and erasing it would quietly rewrite the
+    analytics. The log keeps the company, which is what those reports group by."""
+    contact = _get_hr_contact(company_id, hr_id, db, current_user)
+    db.query(Communication).filter(Communication.hr_contact_id == contact.id).update(
+        {Communication.hr_contact_id: None}, synchronize_session=False
+    )
+    db.delete(contact)
+    db.commit()
 
 
 @router.post("/{company_id}/hr-contacts/{hr_id}/draft-email", response_model=DraftEmailResponse)

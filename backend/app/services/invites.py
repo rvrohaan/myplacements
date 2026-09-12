@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.links import tenant_url
 from app.models.college import College
 from app.models.invite import InvitePurpose, UserInvite
 from app.models.user import User, UserRole
@@ -91,12 +92,7 @@ def invite_url(token: str, college: College | None) -> str:
     only host where the account can sign in (see auth.login). Accounts with no
     college are platform admins, who live on the console subdomain.
     """
-    host = (
-        f"{college.code}.{settings.BASE_DOMAIN}"
-        if college
-        else f"{settings.ADMIN_SUBDOMAIN}.{settings.BASE_DOMAIN}"
-    )
-    return f"{settings.LINK_SCHEME}://{host}/accept-invite/{token}"
+    return tenant_url(college, f"/accept-invite/{token}")
 
 
 @dataclass

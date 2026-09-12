@@ -84,11 +84,23 @@ class HRContact(Base):
     linkedin = Column(String, nullable=True)
     region = Column(String, nullable=True)
     response_status = Column(String, nullable=True)
+    # The officer's own read on the relationship, 1-5. Deliberately a human
+    # judgement and never computed: somebody can be a champion for the college
+    # before a single communication has been logged against them, and a contact
+    # who answers every mail politely while blocking every drive is not a 5.
+    # The computed counterpart lives in services.hr_engagement, which scores the
+    # evidence instead - the two are shown side by side and neither overwrites
+    # the other.
     relationship_strength = Column(Integer, default=3)
     last_contacted_at = Column(DateTime, nullable=True)
     next_followup_date = Column(DateTime, nullable=True)
+    # What we owe this contact next, in the officer's words - "send the 2027
+    # brochure", "confirm the JD". next_followup_date says *when*; this says
+    # *what*, which is the half that goes missing when an officer hands over.
+    next_action = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     company = relationship("Company", back_populates="hr_contacts")
 

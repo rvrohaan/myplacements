@@ -278,3 +278,40 @@ def send_daily_digest_email(
 
     subject = f"{who} placement update - {headline}"
     return send_email(to, subject, html, "\n".join(text_lines))
+
+
+def send_notification_email(
+    to: str,
+    name: str,
+    college_name: str | None,
+    title: str,
+    body: str | None,
+    url: str,
+) -> str:
+    """A single high-priority in-app notification, mirrored to email.
+
+    Only the handful of events services.notify marks HIGH come through here -
+    something that wants acting on before the end of the day - so the format is
+    deliberately plain: the headline, the detail, and a link to the page that
+    shows it.
+    """
+    greeting = f"Hi {name}," if name else "Hi,"
+    who = college_name or "MyPlacement.AI"
+
+    text = f"{greeting}\n\n{title}\n"
+    if body:
+        text += f"\n{body}\n"
+    text += f"\nOpen it here:\n{url}\n"
+
+    detail = f"<p>{escape(body)}</p>" if body else ""
+    html = (
+        f"<p>{escape(greeting)}</p>"
+        f'<p style="font-size:1.05em;font-weight:700;margin:4px 0;">{escape(title)}</p>'
+        f"{detail}"
+        f'<p style="margin-top:20px;"><a href="{escape(url, quote=True)}" '
+        'style="display:inline-block;padding:10px 24px;background:#4f46e5;color:#fff;'
+        'text-decoration:none;border-radius:8px;font-weight:700;">Open MyPlacement.AI</a></p>'
+        f'<p style="color:#64748b;font-size:.85em;">You are receiving this because it '
+        f"needs attention today at {escape(who)}.</p>"
+    )
+    return send_email(to, f"{who}: {title}", html, text)

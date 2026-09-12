@@ -35,6 +35,30 @@ export function formatDateTime(ts?: string): string {
   })
 }
 
+/**
+ * A backend timestamp as a short relative age ("4m", "2h", "3d").
+ *
+ * Applies the same trailing-Z fix as formatDateTime: without it every
+ * notification would read as hours in the future.
+ */
+export function timeAgo(ts?: string): string {
+  if (!ts) return ''
+  const iso = /[zZ]|[+-]\d{2}:?\d{2}$/.test(ts) ? ts : `${ts}Z`
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return ''
+  // Clamp at zero: a client clock a few seconds behind the server must not
+  // render "in 3 seconds".
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  if (secs < 60) return 'just now'
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d`
+  return formatDate(iso)
+}
+
 export const STATUS_COLORS: Record<string, string> = {
   active: 'bg-green-100 text-green-700',
   priority: 'bg-blue-100 text-blue-700',

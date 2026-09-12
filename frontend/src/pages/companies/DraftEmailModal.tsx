@@ -16,7 +16,10 @@ export default function DraftEmailModal({
   contact,
   onClose,
 }: {
-  company: Company
+  // Only the id and name are ever read here. Taking the narrow shape lets the
+  // HR directory open this modal from a row it already has, instead of having
+  // to find the full company first (and silently doing nothing when it can't).
+  company: Pick<Company, 'id' | 'name'>
   contact: HRContact
   onClose: () => void
 }) {

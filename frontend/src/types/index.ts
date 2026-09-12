@@ -34,6 +34,31 @@ export interface User {
   created_at: string
 }
 
+export type NotificationPriority = 'normal' | 'high'
+
+/**
+ * One in-app notification.
+ *
+ * Named AppNotification rather than Notification because the latter is a DOM
+ * global - shadowing it in a file that also touches the browser API is a nasty
+ * debug. Title, body and link are rendered by the backend at emit time, so this
+ * renders without knowing anything about what it refers to.
+ */
+export interface AppNotification {
+  id: number
+  type: string
+  priority: NotificationPriority
+  title: string
+  body?: string
+  link?: string
+  entity_type?: string
+  entity_id?: number
+  meta?: Record<string, unknown>
+  is_read: boolean
+  actor_name?: string
+  created_at: string
+}
+
 /** Delivery outcome for the one automated channel on an invite. */
 export type EmailStatus = 'sent' | 'failed' | 'skipped'
 
@@ -123,11 +148,54 @@ export interface HRContact {
   linkedin?: string
   region?: string
   response_status?: string
+  /** The officer's own read on the relationship, 1–5. A human judgement, never
+   *  computed — its evidence-based counterpart is `HREngagement`. */
   relationship_strength: number
   last_contacted_at?: string
   next_followup_date?: string
+  /** What we owe this contact next, in the officer's words. `next_followup_date`
+   *  says when; this says what. */
+  next_action?: string
   notes?: string
   created_at: string
+}
+
+export type EngagementBand = 'responsive' | 'warm' | 'slow' | 'cold'
+
+/** Computed from the communication log — see backend services/hr_engagement.py.
+ *  Absent entirely for a contact with no logged history, rather than zero. */
+export interface HREngagement {
+  score: number
+  band: EngagementBand
+  /** No contact at all inside the scoring window. The score is capped below
+   *  "warm" when true, because there is no recent evidence either way. */
+  stale: boolean
+  days_since_contact?: number
+  total_logged: number
+  replied: number
+  awaited: number
+  last_contacted_at?: string
+  last_replied_at?: string
+  days_since_reply?: number
+  overdue_followups: number
+  components: Record<string, number>
+}
+
+/** A contact as the cross-company HR directory returns it. */
+export interface HRContactDirectoryEntry extends HRContact {
+  company_name: string
+  company_status?: string
+  /** Author of the most recent communication logged against them. */
+  last_contacted_by?: string
+  engagement?: HREngagement
+}
+
+export interface HRSummary {
+  total: number
+  overdue: number
+  due_this_week: number
+  no_followup: number
+  never_contacted: number
 }
 
 export type PlacementStatus = 'unplaced' | 'placed' | 'opted_out' | 'higher_studies'
@@ -750,4 +818,14 @@ export interface JobScanSettings {
   /** The platform's daily-scan switch: shared by every college, super_admin only. */
   schedule_enabled: boolean
   can_manage_schedule: boolean
+}
+
+export interface PlatformScanStatus {
+  /** Whether the daily scan runs by itself. Platform-wide; super_admin only. */
+  schedule_enabled: boolean
+  scan_hour: number
+  pool_size: number
+  last_scan?: JobScan | null
+  updated_at?: string | null
+  updated_by_name?: string | null
 }

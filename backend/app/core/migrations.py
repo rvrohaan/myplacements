@@ -204,6 +204,64 @@ _MIGRATIONS = [
     "ALTER TABLE job_lead_scans ALTER COLUMN college_id DROP NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_job_lead_scans_daily "
     "ON job_lead_scans (scan_date) WHERE triggered_by_id IS NULL",
+    # Drive.college_id has been on the model for a while but never had a
+    # statement here, so databases predating it never grew the column. Without it
+    # every tenant-scoped drive query fails, and drives created before the column
+    # was stamped are invisible to their own college - hence the backfill, which
+    # takes the tenant from the drive's company and is a no-op once applied.
+    "ALTER TABLE drives ADD COLUMN IF NOT EXISTS college_id INTEGER REFERENCES colleges(id)",
+    "UPDATE drives d SET college_id = c.college_id FROM companies c "
+    "WHERE d.company_id = c.id AND d.college_id IS NULL AND c.college_id IS NOT NULL",
+    # Notifications. The table itself comes from create_all; these indexes are
+    # repeated here because create_all will not add an index to a table that
+    # already exists on a redeployed database (see the daily-update note above).
+    "CREATE INDEX IF NOT EXISTS ix_notifications_user_created "
+    "ON notifications (user_id, created_at DESC)",
+    # The badge query. Partial, so it stays small however much history builds up.
+    "CREATE INDEX IF NOT EXISTS ix_notifications_user_unread "
+    "ON notifications (user_id) WHERE read_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS ix_notifications_group ON notifications (user_id, group_key)",
+    # Digest notifications used to link at the page rather than at the entry they
+    # were about. A row's link is written once, at emit time, and deliberately
+    # never recomputed on read - so rows already in someone's bell keep pointing
+    # at the top of today's digest until they are rewritten here. Both statements
+    # only match the old literal, which makes them no-ops once applied.
+    #
+    # A row standing for several people gets the day alone; pointing it at one of
+    # them would be wrong.
+    """
+    UPDATE notifications n
+    SET link = '/daily-digest?date=' || to_char(d.report_date, 'YYYY-MM-DD')
+    FROM daily_updates d
+    WHERE n.link = '/daily-digest'
+      AND n.entity_type = 'daily_update'
+      AND n.entity_id = d.id
+      AND COALESCE((n.meta ->> 'count')::int, 1) > 1
+    """,
+    """
+    UPDATE notifications n
+    SET link = '/daily-digest?date=' || to_char(d.report_date, 'YYYY-MM-DD')
+               || '&update=' || n.entity_id
+    FROM daily_updates d
+    WHERE n.link = '/daily-digest'
+      AND n.entity_type = 'daily_update'
+      AND n.entity_id = d.id
+    """,
+    # HR contact management. `next_action` records what we owe the contact next;
+    # `updated_at` was missing from the table entirely, so an edited contact
+    # looked untouched next to every other record in the schema.
+    "ALTER TABLE hr_contacts ADD COLUMN IF NOT EXISTS next_action VARCHAR",
+    "ALTER TABLE hr_contacts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP",
+    "UPDATE hr_contacts SET updated_at = created_at WHERE updated_at IS NULL",
+    # Rows written before the column default landed sit at NULL, which a 1-5
+    # rating has no sensible way to render. 3 is the column default - the
+    # "no strong opinion either way" rung.
+    "UPDATE hr_contacts SET relationship_strength = 3 WHERE relationship_strength IS NULL",
+    # The HR directory scores engagement by walking each contact's
+    # communications. hr_contact_id was a plain FK column with no index, so that
+    # join was a sequential scan per contact.
+    "CREATE INDEX IF NOT EXISTS ix_communications_hr_contact "
+    "ON communications (hr_contact_id) WHERE hr_contact_id IS NOT NULL",
 ]
 
 # New values for existing native enum types. Stored labels are the enum *member

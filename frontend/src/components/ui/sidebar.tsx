@@ -6,6 +6,7 @@ import {
   BookOpen,
   BrainCircuit,
   Building2,
+  Contact,
   CalendarDays,
   ChevronsUpDown,
   GraduationCap,
@@ -18,6 +19,7 @@ import {
   ClipboardCheck,
   Newspaper,
   Radar,
+  SlidersHorizontal,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Link, useLocation } from "react-router-dom";
@@ -85,6 +87,7 @@ const navItems = [
   { to: "/colleges", icon: School, label: "Colleges", consoleOnly: true },
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/companies", icon: Building2, label: "Companies" },
+  { to: "/hr-contacts", icon: Contact, label: "HR Contacts" },
   { to: "/students", icon: GraduationCap, label: "Students" },
   { to: "/drives", icon: CalendarDays, label: "Drives" },
   { to: "/officers", icon: UserCog, label: "Officers" },
@@ -96,6 +99,8 @@ const navItems = [
   { to: "/training", icon: BookOpen, label: "Training" },
   { to: "/analytics", icon: BarChart3, label: "Analytics" },
   { to: "/people", icon: Users, label: "People", adminOnly: true },
+  // Platform-wide switches: the console, and only for the platform owner.
+  { to: "/platform", icon: SlidersHorizontal, label: "Platform", consoleOnly: true, superAdminOnly: true },
 ];
 
 function initials(name?: string) {
@@ -115,12 +120,14 @@ export function SessionNavBar() {
   const { pathname } = useLocation();
   const { user, logout } = useAuthStore();
   const isAdmin = !!user && ADMIN_ROLES.includes(user.role);
+  const isSuperAdmin = user?.role === "super_admin";
   const isOfficer = user?.role === "placement_officer";
   const isFiler = isOfficer || user?.role === "department_coordinator";
   const adminHost = isAdminHost();
   // The platform console shows only its console tools (Colleges, People); college
   // portals show the data tabs and hide console-only items.
   const visibleNavItems = navItems.filter((item) => {
+    if (item.superAdminOnly && !isSuperAdmin) return false;
     if (item.consoleOnly) return adminHost;
     if (adminHost) return item.to === "/people";
     if (item.filerOnly) return isFiler;
@@ -203,10 +210,16 @@ export function SessionNavBar() {
                 <Separator className="mb-2 w-full" />
                 <div>
                   <DropdownMenu modal={false} open={menuOpen} onOpenChange={setMenuOpen}>
-                    <DropdownMenuTrigger className="w-full">
+                    <DropdownMenuTrigger
+                      className="w-full"
+                      aria-label={`Account: ${user?.full_name ?? "signed in"}`}
+                    >
                       <div className="flex h-8 w-full flex-row items-center gap-2 rounded-md px-2 py-1.5 transition hover:bg-primary-800 cursor-pointer">
-                        <Avatar className="size-4">
-                          <AvatarFallback>
+                        {/* Deliberately larger than the 4x4 nav icons: this is
+                            the account, not another destination, and it is the
+                            only avatar in the app now that the header has none. */}
+                        <Avatar className="size-6 shrink-0 shadow-sm shadow-sky-500/30">
+                          <AvatarFallback className="bg-gradient-to-br from-blue-500 to-cyan-500 text-[10px] font-semibold text-white">
                             {initials(user?.full_name)}
                           </AvatarFallback>
                         </Avatar>
@@ -228,8 +241,8 @@ export function SessionNavBar() {
                       className="border-primary-700 bg-primary-900 text-white"
                     >
                       <div className="flex flex-row items-center gap-2 p-2">
-                        <Avatar className="size-6">
-                          <AvatarFallback>
+                        <Avatar className="size-8 shrink-0">
+                          <AvatarFallback className="bg-gradient-to-br from-blue-500 to-cyan-500 text-xs font-semibold text-white">
                             {initials(user?.full_name)}
                           </AvatarFallback>
                         </Avatar>

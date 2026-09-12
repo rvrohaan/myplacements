@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -34,7 +35,7 @@ import {
   TOTAL_LABELS,
   useDigestActions,
 } from './digestParts'
-import { formatDate, formatDateTime } from '@/lib/utils'
+import { cn, formatDate, formatDateTime } from '@/lib/utils'
 import type { DailyDigest as DailyDigestData, DailyUpdate } from '@/types'
 
 const CHART_TOOLTIP = {
@@ -69,13 +70,34 @@ const SLICE_TITLES: Record<Slice, string> = {
 
 export default function DailyDigest() {
   const toast = useToast()
-  const [date, setDate] = useState(() => isoDate(new Date()))
+  // A notification links here as ?date=YYYY-MM-DD&update=<id>. The date has to
+  // travel with it: this page opens on today, so without it a notification read
+  // the next morning would land on the wrong day and the update would be absent.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const targetId = Number(searchParams.get('update')) || null
+  const today = useMemo(() => isoDate(new Date()), [])
+  // Derived from the URL rather than copied into state at mount. This component
+  // stays mounted when one notification is opened from another, so a `useState`
+  // initialiser would run only for the first arrival - every later one would
+  // change the address bar and leave the page on the day already on screen.
+  // Stepping the day writes back here, which also makes the view shareable and
+  // the back button work. Changing the day drops `update`: the targeted entry
+  // belongs to the day that was being left.
+  const date = searchParams.get('date') || today
+  const setDate = (next: string) => setSearchParams({ date: next }, { replace: true })
   const [digest, setDigest] = useState<DailyDigestData | null>(null)
   const [loading, setLoading] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
   const [expanded, setExpanded] = useState<number | null>(null)
   const [slice, setSlice] = useState<Slice | null>(null)
+  // Briefly ringed after a deep link, so the reader's eye lands on the row the
+  // notification was about rather than on whatever is at that scroll position.
+  const [flash, setFlash] = useState<number | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  // Which target has already been applied, so the row does not snap back open
+  // every time the digest reloads after a reply. A plain boolean would have
+  // stopped at the first arrival and ignored every notification opened after it.
+  const deepLinked = useRef<number | null>(null)
 
   /**
    * `silent` re-reads the day without swapping the page for the skeleton. Reply
@@ -102,7 +124,36 @@ export default function DailyDigest() {
     load(date)
   }, [date])
 
-  const today = useMemo(() => isoDate(new Date()), [])
+  useEffect(() => {
+    if (!digest || targetId === null || deepLinked.current === targetId) return
+    // The person may not be on this day at all - a stale link, or the digest for
+    // the previous day still on screen while the new one loads. Leave the page
+    // alone and stay unmarked, so the arrival still applies once its day lands.
+    if (!digest.updates.some((u) => u.id === targetId)) return
+    deepLinked.current = targetId
+    setSlice(null)
+    setExpanded(targetId)
+    // Scrolling is left to the row itself. This effect runs on the commit where
+    // `digest` has arrived but `loading` is still true, so the page is showing
+    // its skeleton and the row does not exist in the DOM yet - looking it up
+    // here finds nothing and the scroll is silently lost, which is why the row
+    // used to open without the page ever moving.
+    setFlash(targetId)
+  }, [digest, targetId])
+
+  // Leaving the target behind - stepping the day, or arriving with no target at
+  // all - clears the guard, so opening that same notification again still works.
+  useEffect(() => {
+    if (targetId === null) deepLinked.current = null
+  }, [targetId])
+
+  // Drop the ring once it has done its job. In its own effect so that a silent
+  // reload of the digest cannot cut it short.
+  useEffect(() => {
+    if (flash === null) return
+    const clear = setTimeout(() => setFlash(null), 2400)
+    return () => clearTimeout(clear)
+  }, [flash])
 
   /** Clicking a compliance card drills the list below into that slice; clicking
    *  the same card again clears it. The list sits under the fold, so bring it
@@ -321,6 +372,7 @@ export default function DailyDigest() {
                   key={update.id}
                   update={update}
                   open={expanded === update.id}
+                  flash={flash === update.id}
                   onToggle={() => setExpanded(expanded === update.id ? null : update.id)}
                   onReview={review}
                 />
@@ -369,15 +421,32 @@ export default function DailyDigest() {
 function UpdateRow({
   update,
   open,
+  flash,
   onToggle,
   onReview,
 }: {
   update: DailyUpdate
   open: boolean
+  flash?: boolean
   onToggle: () => void
   onReview: (id: number, note: string | null) => void
 }) {
   const [note, setNote] = useState('')
+  const rowRef = useRef<HTMLLIElement>(null)
+
+  // Runs when this row is actually mounted, which is the only moment the scroll
+  // can succeed. `open` is set in the same batch, so by now the row has its full
+  // expanded height and `center` lands on the real middle of it.
+  //
+  // Deliberately not smooth: the reader is arriving from a notification, so they
+  // already know what they clicked and an animation only makes them watch the
+  // page travel. Landing on the row is the point, and it is the behaviour that
+  // survives a competing scroll or reduced-motion settings.
+  useEffect(() => {
+    if (!flash) return
+    rowRef.current?.scrollIntoView({ block: 'center' })
+  }, [flash])
+
   const metrics = update.metrics ?? {}
   // [metric, singular, plural] - "1 calls" reads as a bug to whoever spots it.
   const chips =
@@ -403,7 +472,14 @@ function UpdateRow({
   ]
 
   return (
-    <li className="py-3 first:pt-0 last:pb-0">
+    <li
+      ref={rowRef}
+      id={`update-${update.id}`}
+      className={cn(
+        'py-3 first:pt-0 last:pb-0 transition-colors duration-500',
+        flash && 'bg-primary-50/70 ring-1 ring-primary-200 rounded-lg px-3 -mx-3'
+      )}
+    >
       <button
         type="button"
         onClick={onToggle}

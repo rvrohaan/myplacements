@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.security import get_password_hash
 
+from app.models.company import Company
 from app.models.drive import (
     Drive,
     DriveParticipant,
@@ -36,6 +37,7 @@ from app.schemas.offer import OfferCreate, OfferOut
 from app.routers.students import _backing_email
 from app.services.excel_io import XLSX_MEDIA_TYPE, Column, build_workbook
 from app.services.round_roster import TEMPLATE_HEADERS, extract_roster
+from app.services import notify
 from app.services.student_scoring import assess
 
 router = APIRouter(prefix="/drives", tags=["drives"])
@@ -43,6 +45,26 @@ router = APIRouter(prefix="/drives", tags=["drives"])
 # A drive can't have an unbounded number of interview rounds; cap it defensively
 # so a bad value can't spawn thousands of rows.
 MAX_ROUNDS = 15
+
+
+def _scope_drives(q, user: User):
+    """Restrict a Drive query to the caller's tenant. Mirrors the filter
+    companies.list_companies applies: a tenant user sees only their own college's
+    drives, and a super_admin (no college of their own) sees everything."""
+    if user.college_id:
+        q = q.filter(Drive.college_id == user.college_id)
+    return q
+
+
+def _visible_drive(drive_id: int, db: Session, user: User) -> Drive:
+    """The drive, or 404 - enforcing the tenant boundary on every single-row
+    access. A 404 rather than a 403 so another college's drive doesn't leak its
+    existence, the same rule companies._accessible_company follows. Drives that
+    predate the college_id backfill carry NULL and stay visible to everyone."""
+    drive = db.query(Drive).filter(Drive.id == drive_id).first()
+    if not drive or (user.college_id and drive.college_id and drive.college_id != user.college_id):
+        raise HTTPException(status_code=404, detail="Drive not found")
+    return drive
 
 
 def _sync_rounds(drive: Drive) -> None:
@@ -101,10 +123,10 @@ def list_drives(
     skip: int = 0,
     limit: int = Query(default=50, le=200),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _promote_due_drives(db)  # flip any drives whose start date has arrived
-    q = db.query(Drive)
+    q = _scope_drives(db.query(Drive), current_user)
     if status:
         q = q.filter(Drive.status == status)
     if company_id:
@@ -113,52 +135,72 @@ def list_drives(
 
 
 @router.post("", response_model=DriveOut, status_code=201)
-def create_drive(payload: DriveCreate, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def create_drive(
+    payload: DriveCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
     data = payload.model_dump()
     if data.get("total_rounds") is not None:
         data["total_rounds"] = max(0, min(data["total_rounds"], MAX_ROUNDS))
-    drive = Drive(**data)
+    company = db.query(Company).filter(Company.id == data["company_id"]).first()
+    if not company or (
+        current_user.college_id and company.college_id and company.college_id != current_user.college_id
+    ):
+        raise HTTPException(status_code=404, detail="Company not found")
+    # Stamp the tenant, without which the drive is invisible to every scoped
+    # query. The company is the authority; a super_admin has no college of their
+    # own to fall back on.
+    drive = Drive(**data, college_id=company.college_id or current_user.college_id)
     db.add(drive)
     _sync_rounds(drive)
+    db.flush()  # assign drive.id for the notification's deep link
+    notify.drive_created(db, drive=drive, actor=current_user)
     db.commit()
     db.refresh(drive)
     return drive
 
 
 @router.get("/{drive_id}", response_model=DriveOut)
-def get_drive(drive_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def get_drive(drive_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _promote_due_drives(db)  # flip any drives whose start date has arrived
-    drive = db.query(Drive).filter(Drive.id == drive_id).first()
-    if not drive:
-        raise HTTPException(status_code=404, detail="Drive not found")
-    return drive
+    return _visible_drive(drive_id, db, current_user)
 
 
 @router.put("/{drive_id}", response_model=DriveOut)
 def update_drive(
-    drive_id: int, payload: DriveUpdate, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+    drive_id: int,
+    payload: DriveUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    drive = db.query(Drive).filter(Drive.id == drive_id).first()
-    if not drive:
-        raise HTTPException(status_code=404, detail="Drive not found")
+    drive = _visible_drive(drive_id, db, current_user)
     updates = payload.model_dump(exclude_none=True)
     if "total_rounds" in updates:
         updates["total_rounds"] = max(0, min(updates["total_rounds"], MAX_ROUNDS))
+    was_status = drive.status
+    moved = any(
+        field in updates and updates[field] != getattr(drive, field)
+        for field in ("drive_date", "registration_deadline")
+    )
     for field, value in updates.items():
         setattr(drive, field, value)
     # Keep the round rows in step with any change to the planned round count.
     if "total_rounds" in updates:
         _sync_rounds(drive)
+
+    # Cancelling is the urgent one - registered students have to be told - so it
+    # wins if a single edit does both.
+    if drive.status == DriveStatus.CANCELLED and was_status != DriveStatus.CANCELLED:
+        notify.drive_cancelled(db, drive=drive, actor=current_user)
+    elif moved:
+        notify.drive_rescheduled(db, drive=drive, actor=current_user)
     db.commit()
     db.refresh(drive)
     return drive
 
 
 @router.get("/{drive_id}/rounds", response_model=list[DriveRoundOut])
-def list_rounds(drive_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    drive = db.query(Drive).filter(Drive.id == drive_id).first()
-    if not drive:
-        raise HTTPException(status_code=404, detail="Drive not found")
+def list_rounds(drive_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    drive = _visible_drive(drive_id, db, current_user)
     return sorted(drive.rounds, key=lambda r: r.round_number)
 
 
@@ -168,8 +210,9 @@ def update_round(
     round_id: int,
     payload: DriveRoundUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    _visible_drive(drive_id, db, current_user)
     rnd = db.query(DriveRound).filter(
         DriveRound.id == round_id, DriveRound.drive_id == drive_id
     ).first()
@@ -246,9 +289,7 @@ async def upload_round_results(
     drive, and updates per-student status — including auto-withdrawing anyone who
     cleared the previous round but is absent here.
     """
-    drive = db.query(Drive).filter(Drive.id == drive_id).first()
-    if not drive:
-        raise HTTPException(status_code=404, detail="Drive not found")
+    drive = _visible_drive(drive_id, db, current_user)
     rnd = db.query(DriveRound).filter(DriveRound.id == round_id, DriveRound.drive_id == drive_id).first()
     if not rnd:
         raise HTTPException(status_code=404, detail="Round not found")
@@ -294,6 +335,11 @@ async def upload_round_results(
     absent -= set(appeared.keys())
 
     summary = _apply_round_results(db, drive, rnd, appeared, passed, absent, current_user)
+    # One notification for the upload, never one per student: a roster can carry
+    # several hundred.
+    notify.drive_round_results(
+        db, drive=drive, round_number=rnd.round_number, summary=summary, actor=current_user
+    )
     db.commit()
     summary["used_ai"] = ai_a or ai_p or ai_c
     summary["round_number"] = rnd.round_number
@@ -497,14 +543,21 @@ def _apply_round_results(
 
 
 @router.get("/{drive_id}/participants", response_model=list[ParticipantOut])
-def list_participants(drive_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def list_participants(
+    drive_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    _visible_drive(drive_id, db, current_user)
     return db.query(DriveParticipant).filter(DriveParticipant.drive_id == drive_id).all()
 
 
 @router.post("/{drive_id}/participants", response_model=ParticipantOut, status_code=201)
 def add_participant(
-    drive_id: int, payload: ParticipantCreate, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+    drive_id: int,
+    payload: ParticipantCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _visible_drive(drive_id, db, current_user)
     existing = db.query(DriveParticipant).filter(
         DriveParticipant.drive_id == drive_id,
         DriveParticipant.student_id == payload.student_id
@@ -524,8 +577,9 @@ def update_participant_status(
     participant_id: int,
     payload: ParticipantUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    _visible_drive(drive_id, db, current_user)
     participant = db.query(DriveParticipant).filter(
         DriveParticipant.id == participant_id,
         DriveParticipant.drive_id == drive_id
@@ -542,6 +596,13 @@ def update_participant_status(
 
     if payload.status == ParticipantStatus.SELECTED:
         _record_selection(db, participant, student, payload.ctc)
+        if old_status != ParticipantStatus.SELECTED:
+            notify.drive_selection(
+                db,
+                drive=participant.drive,
+                student_name=student.full_name if student else None,
+                actor=current_user,
+            )
     elif old_status == ParticipantStatus.SELECTED:
         # A previous selection was undone — drop its offer and re-evaluate placement.
         _undo_selection(db, drive_id, student)
@@ -601,15 +662,21 @@ def _undo_selection(db: Session, drive_id: int, student: Student | None) -> None
 
 @router.post("/{drive_id}/offers", response_model=OfferOut, status_code=201)
 def create_offer(
-    drive_id: int, payload: OfferCreate, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+    drive_id: int,
+    payload: OfferCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    drive = _visible_drive(drive_id, db, current_user)
     offer = Offer(**payload.model_dump(), drive_id=drive_id)
     db.add(offer)
+    notify.drive_offer(db, drive=drive, actor=current_user)
     db.commit()
     db.refresh(offer)
     return offer
 
 
 @router.get("/{drive_id}/offers", response_model=list[OfferOut])
-def list_offers(drive_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def list_offers(drive_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _visible_drive(drive_id, db, current_user)
     return db.query(Offer).filter(Offer.drive_id == drive_id).all()

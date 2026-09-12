@@ -47,6 +47,8 @@ from app.schemas.job_lead import (
     JobScanOut,
     JobScanResult,
     JobScanSettings,
+    PlatformScanStatus,
+    PlatformScanUpdate,
 )
 from app.services import job_scan
 from app.services.ai_service import ScanUnavailable
@@ -366,6 +368,48 @@ def update_settings(
     return _settings_payload(db, college, current_user)
 
 
+# --- The platform console ---------------------------------------------------
+# The scan is platform-wide, so its switch belongs on the platform console
+# (admin.*), which has no tenant at all. These two routes are the only ones here
+# that do not resolve a college.
+
+
+@router.get("/platform", response_model=PlatformScanStatus)
+def platform_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN)),
+):
+    platform = get_platform_settings(db)
+    return {
+        "schedule_enabled": bool(platform.job_scan_schedule_enabled),
+        "scan_hour": SCAN_HOUR,
+        "pool_size": db.query(JobPosting).count(),
+        "last_scan": _serialize_scan(_last_scan(db)),
+        "updated_at": platform.updated_at,
+        "updated_by_name": platform.updated_by.full_name if platform.updated_by else None,
+    }
+
+
+@router.put("/platform", response_model=PlatformScanStatus)
+def update_platform(
+    payload: PlatformScanUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.SUPER_ADMIN)),
+):
+    """Start or stop the daily scan for everybody."""
+    platform = get_platform_settings(db)
+    if payload.schedule_enabled != bool(platform.job_scan_schedule_enabled):
+        platform.job_scan_schedule_enabled = payload.schedule_enabled
+        platform.updated_by_id = current_user.id
+        db.commit()
+        logger.info(
+            "Daily opportunity scan %s by %s",
+            "started" if payload.schedule_enabled else "stopped",
+            current_user.email,
+        )
+    return platform_status(db=db, current_user=current_user)
+
+
 # --- Scanning ---------------------------------------------------------------
 
 
@@ -384,7 +428,11 @@ def scan_now(
     The two guards below matter because the result is shared. Without them, two
     colleges pressing the button minutes apart would pay twice for one answer.
     """
-    college = _require_college(db, current_user, tenant)
+    # The console has no tenant; a scan started from there belongs to nobody in
+    # particular, which is fine - the pool it fills is shared anyway.
+    college = _resolve_college(db, current_user, tenant)
+    if college is None and current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=404, detail="No college for this request")
 
     if job_scan.running_scan(db):
         raise HTTPException(
@@ -401,7 +449,11 @@ def scan_now(
         )
 
     try:
-        scan = job_scan.run_scan(db, triggered_by_id=current_user.id, college_id=college.id)
+        scan = job_scan.run_scan(
+            db,
+            triggered_by_id=current_user.id,
+            college_id=college.id if college else None,
+        )
     except ScanUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if scan.status == "failed":

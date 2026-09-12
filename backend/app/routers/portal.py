@@ -24,6 +24,8 @@ from app.services.ai_service import (
     review_resume,
 )
 
+from app.services import notify
+
 router = APIRouter(prefix="/portal", tags=["portal"])
 
 
@@ -233,5 +235,8 @@ def apply_to_drive(
     # student later updates their profile resume.
     participant = DriveParticipant(drive_id=drive_id, student_id=student.id, resume_url=student.resume_url)
     db.add(participant)
+    # Tell the staff side. No actor: the student is not a staff recipient, and a
+    # busy drive coalesces these into a single "N new applications" row.
+    notify.drive_application(db, drive=drive, student_name=student.full_name)
     db.commit()
     return {"status": "registered", "drive_id": drive_id}

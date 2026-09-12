@@ -11,14 +11,16 @@ acknowledge and reply, which is what keeps officers filing past week three.
 
 import logging
 import secrets
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.links import tenant_url
 from app.core.deps import get_current_user, require_roles
 from app.core.tenant import get_optional_college
 from app.core.timeutil import (
@@ -29,6 +31,7 @@ from app.core.timeutil import (
     to_naive_utc,
 )
 from app.models.college import College
+from app.models.communication import Communication
 from app.models.daily_update import DailyUpdate, DailyUpdateRun
 from app.models.officer import PlacementOfficer
 from app.models.user import User, UserRole
@@ -39,7 +42,7 @@ from app.schemas.daily_update import (
     DailyUpdateSettings,
     DailyUpdateUpdate,
 )
-from app.services import notifications
+from app.services import notifications, notify
 from app.services.ai_service import draft_escalation_reply
 from app.services.daily_metrics import (
     TOTAL_KEYS,
@@ -162,13 +165,8 @@ def _expected_filers(db: Session, college_id: int | None) -> list[tuple[User, Pl
 
 def _tenant_url(college: College | None, path: str) -> str:
     """A link into the app on the tenant's own host - the only host where these
-    accounts can sign in. Mirrors services.invites.invite_url."""
-    host = (
-        f"{college.code}.{settings.BASE_DOMAIN}"
-        if college
-        else f"{settings.ADMIN_SUBDOMAIN}.{settings.BASE_DOMAIN}"
-    )
-    return f"{settings.LINK_SCHEME}://{host}{path}"
+    accounts can sign in."""
+    return tenant_url(college, path)
 
 
 def _derive_status(cutoff: str, day: date) -> str:
@@ -290,6 +288,14 @@ def file_update(
         submitted_at=to_naive_utc(local_now()),
     )
     db.add(update)
+    db.flush()  # assign update.id before the notification references it
+    notify.daily_update_filed(
+        db, update=update, college_id=current_user.college_id, actor=current_user
+    )
+    if update.needs_escalation:
+        notify.daily_update_escalation(
+            db, update=update, college_id=current_user.college_id, actor=current_user
+        )
     db.commit()
     db.refresh(update)
     return _serialize(update, current_user)
@@ -526,6 +532,9 @@ def _send_reminders(db: Session, college: College, day: date) -> int:
             url=_tenant_url(college, "/daily-update"),
             cutoff=_cutoff_of(college),
         )
+        notify.daily_update_reminder(
+            db, user=user, college_id=college.id, cutoff=_cutoff_of(college)
+        )
         if status == notifications.SENT:
             sent += 1
     return sent
@@ -554,7 +563,43 @@ def _send_digest(db: Session, college: College, day: date) -> int:
         )
         if status == notifications.SENT:
             sent += 1
+    compliance = digest.get("compliance", {})
+    notify.daily_digest_ready(
+        db,
+        college_id=college.id,
+        day=day,
+        headline=f"{compliance.get('filed', 0)}/{compliance.get('expected', 0)} filed.",
+    )
     return sent
+
+
+def _notify_followups(db: Session, college: College, day: date) -> int:
+    """One notification per person with HR follow-ups falling due today.
+
+    Deliberately folded into this tick rather than given its own cron endpoint
+    and token: the loop below already walks every active college hourly and
+    already has a run log to keep a retry idempotent.
+    """
+    start = datetime.combine(day, time.min)
+    end = start + timedelta(days=1)
+    rows = (
+        db.query(Communication.logged_by_id, func.count(Communication.id))
+        .filter(
+            Communication.college_id == college.id,
+            Communication.logged_by_id.isnot(None),
+            Communication.next_followup_date >= start,
+            Communication.next_followup_date < end,
+        )
+        .group_by(Communication.logged_by_id)
+        .all()
+    )
+    told = 0
+    for user_id, count in rows:
+        user = db.query(User).filter(User.id == user_id, User.is_active == True).first()  # noqa: E712
+        if not user:
+            continue
+        told += notify.followups_due(db, user=user, college_id=college.id, count=count)
+    return told
 
 
 @router.post("/cron/run")
@@ -575,7 +620,13 @@ def cron_run(request: Request, db: Session = Depends(get_db)):
 
     now = local_now()
     day = now.date()
-    summary: dict = {"date": day.isoformat(), "reminders": 0, "digests": 0, "colleges": []}
+    summary: dict = {
+        "date": day.isoformat(),
+        "reminders": 0,
+        "digests": 0,
+        "followups": 0,
+        "colleges": [],
+    }
 
     colleges = (
         db.query(College)
@@ -590,7 +641,21 @@ def cron_run(request: Request, db: Session = Depends(get_db)):
             continue
 
         cutoff = parse_cutoff(_cutoff_of(college), day)
-        entry = {"college": college.code, "reminders": 0, "digest": 0}
+        entry = {"college": college.code, "reminders": 0, "digest": 0, "followups": 0}
+
+        # Today's due follow-ups, once per college per day - the first tick after
+        # the working day starts, so it is waiting when people sign in.
+        if not _already_ran(db, college.id, day, "followups"):
+            entry["followups"] = _notify_followups(db, college, day)
+            db.add(
+                DailyUpdateRun(
+                    college_id=college.id,
+                    report_date=day,
+                    kind="followups",
+                    recipients=entry["followups"],
+                )
+            )
+            summary["followups"] += entry["followups"]
 
         # Nudge whoever has not filed, in the window before the deadline. After
         # the cutoff a reminder is pointless - the digest is already on its way.
@@ -621,7 +686,7 @@ def cron_run(request: Request, db: Session = Depends(get_db)):
             )
             summary["digests"] += entry["digest"]
 
-        if entry["reminders"] or entry["digest"]:
+        if entry["reminders"] or entry["digest"] or entry["followups"]:
             summary["colleges"].append(entry)
 
     db.commit()
@@ -653,6 +718,7 @@ def edit_update(
     current_user: User = Depends(get_current_user),
 ):
     update = _get_for_write(update_id, db, current_user)
+    was_escalated = update.needs_escalation
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(update, field, value)
 
@@ -666,6 +732,12 @@ def edit_update(
         author = update.submitted_by or current_user
         update.metrics = metrics_for(db, author, officer, update.kind, update.report_date)
 
+    # Only on the transition: editing an already-escalated update must not
+    # re-alert the heads every time a typo is fixed.
+    if update.needs_escalation and not was_escalated:
+        notify.daily_update_escalation(
+            db, update=update, college_id=update.college_id, actor=current_user
+        )
     db.commit()
     db.refresh(update)
     return _serialize(update, current_user)
@@ -703,6 +775,9 @@ def review_update(
     update.reviewed_at = to_naive_utc(local_now())
     if payload.note is not None:
         update.review_note = payload.note.strip() or None
+    notify.daily_update_reviewed(
+        db, update=update, college_id=update.college_id, actor=current_user
+    )
     db.commit()
     db.refresh(update)
     return _serialize(update, current_user)

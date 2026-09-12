@@ -15,12 +15,15 @@ import DriveDetail from '@/pages/drives/DriveDetail'
 import Analytics from '@/pages/analytics/Analytics'
 import Officers from '@/pages/officers/Officers'
 import Communications from '@/pages/communications/Communications'
+import HRContacts from '@/pages/hr/HRContacts'
 import Training from '@/pages/training/Training'
 import DailyUpdate from '@/pages/daily/DailyUpdate'
 import DailyDigest from '@/pages/daily/DailyDigest'
 import Opportunities from '@/pages/opportunities/Opportunities'
 import People from '@/pages/people/People'
 import Colleges from '@/pages/colleges/Colleges'
+import Platform from '@/pages/platform/Platform'
+import Notifications from '@/pages/notifications/Notifications'
 import SidebarPreview from '@/pages/SidebarPreview'
 import StudentLayout from '@/pages/portal/StudentLayout'
 import StudentDashboard from '@/pages/portal/StudentDashboard'
@@ -127,7 +130,13 @@ export default function App() {
           }
         >
           <Route index element={<Navigate to={HOME} replace />} />
+          {/* Not wrapped in CollegeRoute: a platform admin has their own
+              notifications on the console host too. */}
+          <Route path="notifications" element={<Notifications />} />
           <Route path="colleges" element={<ConsoleRoute><Colleges /></ConsoleRoute>} />
+          {/* Platform-wide switches. Console only, and super_admin only —
+              the API refuses anyone else regardless. */}
+          <Route path="platform" element={<ConsoleRoute><Platform /></ConsoleRoute>} />
           <Route path="dashboard" element={<CollegeRoute><Dashboard /></CollegeRoute>} />
           <Route path="companies" element={<CollegeRoute><Companies /></CollegeRoute>} />
           <Route path="companies/:id" element={<CollegeRoute><CompanyDetail /></CollegeRoute>} />
@@ -136,6 +145,7 @@ export default function App() {
           <Route path="drives/:id" element={<CollegeRoute><DriveDetail /></CollegeRoute>} />
           <Route path="officers" element={<CollegeRoute><Officers /></CollegeRoute>} />
           <Route path="communications" element={<CollegeRoute><Communications /></CollegeRoute>} />
+          <Route path="hr-contacts" element={<CollegeRoute><HRContacts /></CollegeRoute>} />
           <Route path="training" element={<CollegeRoute><Training /></CollegeRoute>} />
           <Route path="daily-update" element={<CollegeRoute><DailyUpdate /></CollegeRoute>} />
           <Route

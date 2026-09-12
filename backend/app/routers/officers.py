@@ -21,6 +21,7 @@ from app.schemas.officer import (
     OfficerOut,
     OfficerUpdate,
 )
+from app.services import notify
 from app.services.allocation import NO_MOU, propose_allocations
 
 router = APIRouter(prefix="/officers", tags=["officers"])
@@ -286,6 +287,9 @@ def auto_allocate_apply(
 
     created = 0
     skipped = 0
+    # Collected through the loop and emitted once per officer afterwards: two
+    # hundred allocations must produce one notification each, not two hundred.
+    per_officer: dict[int, list[str]] = {}
     for item in payload.allocations:
         company = companies.get(item.company_id)
         if not company or (current_user.college_id and company.college_id != current_user.college_id):
@@ -307,6 +311,7 @@ def auto_allocate_apply(
             skipped += 1
             continue
         already_assigned.add(item.company_id)
+        per_officer.setdefault(item.officer_id, []).append(company.name)
         priority = item.priority if item.priority in ("low", "normal", "high") else "normal"
         db.add(
             CompanyAssignment(
@@ -319,6 +324,9 @@ def auto_allocate_apply(
         )
         created += 1
 
+    notify.assignment_bulk_created(
+        db, per_officer=per_officer, college_id=current_user.college_id, actor=current_user
+    )
     db.commit()
     return AllocationApplyOut(created=created, skipped=skipped)
 
@@ -426,6 +434,13 @@ def assign_company(
         )
     assignment = CompanyAssignment(officer_id=officer_id, **payload.model_dump())
     db.add(assignment)
+    notify.assignment_created(
+        db,
+        officer_id=officer_id,
+        company=company,
+        college_id=current_user.college_id,
+        actor=current_user,
+    )
     db.commit()
     db.refresh(assignment)
     return _serialize_assignment(assignment)
@@ -449,8 +464,27 @@ def update_assignment(
         raise HTTPException(status_code=404, detail="Assignment not found")
     if payload.status is not None and payload.status not in ASSIGNMENT_STATUSES:
         raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {sorted(ASSIGNMENT_STATUSES)}")
+    was = assignment.status
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(assignment, field, value)
+
+    # Only on the transition into the state, so re-saving an escalated
+    # assignment does not re-alert the heads.
+    if assignment.status != was and assignment.status in ("escalated", "completed"):
+        officer = assignment.officer
+        officer_name = officer.user.full_name if officer and officer.user else None
+        emit = (
+            notify.assignment_escalated
+            if assignment.status == "escalated"
+            else notify.assignment_completed
+        )
+        emit(
+            db,
+            company=assignment.company,
+            officer_name=officer_name,
+            college_id=current_user.college_id or (officer.college_id if officer else None),
+            actor=current_user,
+        )
     db.commit()
     db.refresh(assignment)
     return _serialize_assignment(assignment)
@@ -471,5 +505,12 @@ def delete_assignment(
     )
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
+    notify.assignment_removed(
+        db,
+        officer_id=officer_id,
+        company=assignment.company,
+        college_id=current_user.college_id,
+        actor=current_user,
+    )
     db.delete(assignment)
     db.commit()

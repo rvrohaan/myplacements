@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Sparkles, Phone, Mail, Linkedin, Pencil, Plus, MessageSquare, AlertCircle, CheckCircle2, XCircle } from 'lucide-react'
+import { ArrowLeft, Sparkles, Pencil, MessageSquare, AlertCircle, CheckCircle2, XCircle } from 'lucide-react'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import { useToast } from '@/components/ui/toast'
 import type { Company, CompanyStatus, HRContact, UserRole } from '@/types'
-import { cn, formatDate, STATUS_COLORS } from '@/lib/utils'
+import { cn, STATUS_COLORS } from '@/lib/utils'
 
 const MANAGE_ROLES: UserRole[] = ['super_admin', 'principal', 'pro_chancellor', 'deputy_pro_chancellor']
 // Officers only reach companies allocated to them, and the status is part of
@@ -13,7 +13,7 @@ const MANAGE_ROLES: UserRole[] = ['super_admin', 'principal', 'pro_chancellor', 
 const STATUS_ROLES: UserRole[] = [...MANAGE_ROLES, 'placement_officer']
 import StatusSelect, { type StatusOption } from '@/components/StatusSelect'
 import EditCompanyModal from './EditCompanyModal'
-import AddHRContactModal from './AddHRContactModal'
+import HRContactsPanel from './HRContactsPanel'
 import DraftEmailModal from './DraftEmailModal'
 import InterviewQuestionsModal from './InterviewQuestionsModal'
 import RolesPanel from './RolesPanel'
@@ -36,7 +36,6 @@ export default function CompanyDetail() {
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
-  const [showAddContact, setShowAddContact] = useState(false)
   const [showInterviewQs, setShowInterviewQs] = useState(false)
   // Role title the question generator opens on, when launched from a role card.
   const [interviewQsRole, setInterviewQsRole] = useState('')
@@ -187,49 +186,12 @@ export default function CompanyDetail() {
           </dl>
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-gray-800">HR Contacts ({company.hr_contacts.length})</h3>
-            <button
-              onClick={() => setShowAddContact(true)}
-              className="flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-700"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Add
-            </button>
-          </div>
-          {company.hr_contacts.length === 0 ? (
-            <p className="text-sm text-gray-400">No HR contacts added yet</p>
-          ) : (
-            <div className="space-y-3">
-              {company.hr_contacts.map((hr) => (
-                <div key={hr.id} className="border border-gray-100 rounded-lg p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="font-medium text-gray-900 text-sm">{hr.name}</p>
-                      <p className="text-xs text-gray-500">{hr.designation}</p>
-                    </div>
-                    <button
-                      onClick={() => setEmailContact(hr)}
-                      className="flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-700 shrink-0"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Draft email
-                    </button>
-                  </div>
-                  <div className="flex gap-3 mt-2">
-                    {hr.email && <a href={`mailto:${hr.email}`} className="text-gray-400 hover:text-primary-600"><Mail className="w-3.5 h-3.5" /></a>}
-                    {hr.mobile && <a href={`tel:${hr.mobile}`} className="text-gray-400 hover:text-primary-600"><Phone className="w-3.5 h-3.5" /></a>}
-                    {hr.linkedin && <a href={hr.linkedin} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-primary-600"><Linkedin className="w-3.5 h-3.5" /></a>}
-                  </div>
-                  {hr.next_followup_date && (
-                    <p className="text-xs text-orange-600 mt-1">Follow-up: {formatDate(hr.next_followup_date)}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <HRContactsPanel
+          companyId={company.id}
+          contacts={company.hr_contacts}
+          onChanged={refresh}
+          onDraftEmail={setEmailContact}
+        />
       </div>
 
       <RolesPanel
@@ -262,13 +224,6 @@ export default function CompanyDetail() {
 
       {showEdit && (
         <EditCompanyModal company={company} onClose={() => setShowEdit(false)} onSaved={setCompany} />
-      )}
-      {showAddContact && (
-        <AddHRContactModal
-          companyId={company.id}
-          onClose={() => setShowAddContact(false)}
-          onAdded={refresh}
-        />
       )}
       {showInterviewQs && (
         <InterviewQuestionsModal

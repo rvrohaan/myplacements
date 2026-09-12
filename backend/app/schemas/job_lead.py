@@ -90,3 +90,24 @@ class JobScanSettings(BaseModel):
     # True when the person asking is allowed to change the schedule switch, so
     # the UI can show it as a control rather than a fact.
     can_manage_schedule: Optional[bool] = None
+
+
+class PlatformScanStatus(BaseModel):
+    """The platform's own view of the scan, for the admin console.
+
+    Deliberately not tenant-shaped: this is the switch, what it last did, and how
+    big the shared pool is - the three things somebody deciding whether to start
+    or stop it wants to see.
+    """
+
+    schedule_enabled: bool
+    # Local hour the scheduled scan runs at, so the console can say when.
+    scan_hour: int
+    pool_size: int
+    last_scan: Optional[JobScanOut] = None
+    updated_at: Optional[datetime] = None
+    updated_by_name: Optional[str] = None
+
+
+class PlatformScanUpdate(BaseModel):
+    schedule_enabled: bool

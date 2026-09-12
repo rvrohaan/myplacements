@@ -1,8 +1,19 @@
+import { useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
 import { SessionNavBar } from '@/components/ui/sidebar'
+import { useNotifications } from '@/store/notifications'
 import Header from './Header'
 
 export default function Layout() {
+  // Notification polling is scoped to the staff shell: this unmounts on logout
+  // (ProtectedRoute redirects) and never mounts for students, so a signed-out
+  // tab stops cleanly and the portal never polls at all.
+  useEffect(() => {
+    const { start, stop } = useNotifications.getState()
+    start()
+    return stop
+  }, [])
+
   return (
     <div className="flex h-screen overflow-hidden">
       <SessionNavBar />

@@ -10,6 +10,7 @@ from app.models.communication import Communication, CommunicationType
 from app.models.training import TrainingModule, StudentTraining
 from app.models.daily_update import DailyUpdate, DailyUpdateRun
 from app.models.job_lead import JobLead, JobLeadScan, JobPosting
+from app.models.notification import Notification, HIGH, NORMAL, PRIORITIES
 from app.models.platform_setting import PlatformSetting, get_platform_settings
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "TrainingModule", "StudentTraining",
     "DailyUpdate", "DailyUpdateRun",
     "JobPosting", "JobLead", "JobLeadScan",
+    "Notification", "NORMAL", "HIGH", "PRIORITIES",
     "PlatformSetting", "get_platform_settings",
 ]
