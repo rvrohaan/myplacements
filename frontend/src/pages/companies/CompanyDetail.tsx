@@ -3,10 +3,14 @@ import { useParams, Link } from 'react-router-dom'
 import { ArrowLeft, Sparkles, Phone, Mail, Linkedin, Pencil, Plus, MessageSquare, AlertCircle, CheckCircle2, XCircle } from 'lucide-react'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
+import { useToast } from '@/components/ui/toast'
 import type { Company, CompanyStatus, HRContact, UserRole } from '@/types'
 import { cn, formatDate, STATUS_COLORS } from '@/lib/utils'
 
 const MANAGE_ROLES: UserRole[] = ['super_admin', 'principal', 'pro_chancellor', 'deputy_pro_chancellor']
+// Officers only reach companies allocated to them, and the status is part of
+// working that relationship — so they set it too, alongside management.
+const STATUS_ROLES: UserRole[] = [...MANAGE_ROLES, 'placement_officer']
 import StatusSelect, { type StatusOption } from '@/components/StatusSelect'
 import EditCompanyModal from './EditCompanyModal'
 import AddHRContactModal from './AddHRContactModal'
@@ -24,7 +28,9 @@ const COMPANY_STATUS_OPTIONS: StatusOption<CompanyStatus>[] = [
 export default function CompanyDetail() {
   const { id } = useParams<{ id: string }>()
   const role = useAuthStore((s) => s.user?.role)
+  const toast = useToast()
   const canManage = !!role && MANAGE_ROLES.includes(role)
+  const canSetStatus = !!role && STATUS_ROLES.includes(role)
   const [company, setCompany] = useState<Company | null>(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -68,6 +74,7 @@ export default function CompanyDetail() {
       setCompany(data)
     } catch {
       setCompany({ ...company, status: previous })
+      toast.error('Could not update the status. Change reverted.')
     }
   }
 
@@ -83,7 +90,7 @@ export default function CompanyDetail() {
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <h2 className="text-xl font-bold text-gray-900">{company.name}</h2>
-            {canManage ? (
+            {canSetStatus ? (
               <StatusSelect value={company.status} options={COMPANY_STATUS_OPTIONS} onChange={updateStatus} />
             ) : (
               <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium capitalize', STATUS_COLORS[company.status])}>

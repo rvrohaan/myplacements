@@ -415,10 +415,11 @@ def update_company(
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
+    # Officers work the companies allocated to them — including moving a company
+    # through its status as the relationship develops — and nothing else.
+    if current_user.role == UserRole.PLACEMENT_OFFICER and company.id not in _officer_company_ids(db, current_user):
+        raise HTTPException(status_code=404, detail="Company not found")
     data = payload.model_dump(exclude_none=True)
-    # Company status is a management decision; officers can't change it.
-    if current_user.role == UserRole.PLACEMENT_OFFICER:
-        data.pop("status", None)
     for field, value in data.items():
         setattr(company, field, value)
     db.commit()
