@@ -1,7 +1,25 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BrainCircuit, KeyRound } from 'lucide-react'
+import { BrainCircuit, Eye, EyeOff, KeyRound } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
+import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import { all, required, type Rule, type Rules } from '@/lib/validation'
+
+type PasswordForm = { password: string; confirm: string }
+
+const minLength = (n: number, message: string): Rule<PasswordForm> => (value) =>
+  value.length < n ? message : undefined
+
+const RULES: Rules<PasswordForm> = {
+  password: all(
+    required('Choose a new password.'),
+    minLength(8, 'Use at least 8 characters — longer passphrases are harder to guess.'),
+  ),
+  confirm: (value, form) => {
+    if (!value) return 'Type the new password again to confirm it.'
+    return value === form.password ? undefined : 'The two passwords don’t match. Retype them to be sure.'
+  },
+}
 
 export default function ResetPassword() {
   const navigate = useNavigate()
@@ -11,25 +29,21 @@ export default function ResetPassword() {
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const { formRef, errors, clearError, validate } = useFieldErrors<PasswordForm>()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters long')
-      return
-    }
-    if (password !== confirm) {
-      setError('Passwords do not match')
-      return
-    }
+    // Field-level problems belong under the field, not in a banner at the top.
+    if (!validate(RULES, { password, confirm })) return
     setLoading(true)
     try {
       await resetPassword(password)
       // Students live in the portal; staff land on their dashboard.
       navigate(user?.role === 'student' ? '/portal' : '/dashboard')
     } catch {
-      setError('Could not update password. Please try again.')
+      setError('Could not update your password just now. Check your connection and try again.')
     } finally {
       setLoading(false)
     }
@@ -58,40 +72,72 @@ export default function ResetPassword() {
         </p>
 
         {error && (
-          <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+          <div
+            role="alert"
+            className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm"
+          >
             {error}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">New password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-              placeholder="••••••••"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Confirm new password</label>
-            <input
-              type="password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              required
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-              placeholder="••••••••"
-            />
-          </div>
+        {/* noValidate keeps the browser's own validation tooltips off the field;
+            the messages below each input say the same thing, in our voice. */}
+        <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-4">
+          <Field
+            label="New password"
+            name="password"
+            required
+            error={errors.password}
+            hint="At least 8 characters"
+          >
+            {(p) => (
+              <div className="relative">
+                <input
+                  {...p}
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => {
+                    clearError('password')
+                    setPassword(e.target.value)
+                  }}
+                  className={inputClass(!!errors.password, 'pr-12')}
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 text-gray-400 hover:text-gray-600 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            )}
+          </Field>
+          <Field label="Confirm new password" name="confirm" required error={errors.confirm}>
+            {(p) => (
+              <input
+                {...p}
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => {
+                  clearError('confirm')
+                  setConfirm(e.target.value)
+                }}
+                className={inputClass(!!errors.confirm)}
+                placeholder="••••••••"
+              />
+            )}
+          </Field>
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-primary-600 hover:bg-primary-700 text-white font-medium py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60 shadow-sm shadow-primary-600/25"
+            className="w-full min-h-[44px] bg-primary-600 hover:bg-primary-700 text-white font-medium py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60 shadow-sm shadow-primary-600/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2"
           >
-            {loading ? 'Updating...' : 'Update password & continue'}
+            {loading ? 'Updating…' : 'Update password & continue'}
           </button>
         </form>
       </div>

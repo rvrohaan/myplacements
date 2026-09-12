@@ -6,7 +6,25 @@ import { useAuthStore } from '@/store/authStore'
 import type { Company, CompanyStatus, UserRole } from '@/types'
 import { cn, formatDate, STATUS_COLORS } from '@/lib/utils'
 import ImportExportControls from '@/components/ImportExportControls'
+import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import { useToast } from '@/components/ui/toast'
+import { useConfirm } from '@/components/ui/confirm'
+import { required, type Rules } from '@/lib/validation'
 import AutoAllocateModal from './AutoAllocateModal'
+
+type NewCompanyForm = { name: string; sector: string; domain: string; location: string; website: string; notes: string }
+
+const NEW_COMPANY: NewCompanyForm = { name: '', sector: '', domain: '', location: '', website: '', notes: '' }
+
+const NEW_COMPANY_RULES: Rules<NewCompanyForm> = {
+  name: required('Enter the company name.'),
+  website: (value) => {
+    if (!value.trim()) return undefined
+    return /^https?:\/\/.+/i.test(value.trim())
+      ? undefined
+      : 'Include the full address, starting with https://.'
+  },
+}
 
 const MANAGE_ROLES: UserRole[] = ['super_admin', 'principal', 'pro_chancellor', 'deputy_pro_chancellor']
 
@@ -76,7 +94,32 @@ export default function Companies() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [showAutoAllocate, setShowAutoAllocate] = useState(false)
-  const [formData, setFormData] = useState({ name: '', sector: '', domain: '', location: '', website: '', notes: '' })
+  const [formData, setFormData] = useState<NewCompanyForm>(NEW_COMPANY)
+  const toast = useToast()
+  const confirm = useConfirm()
+  const { formRef, errors, clearError, validate } = useFieldErrors<NewCompanyForm>()
+
+  const updateNew = (field: keyof NewCompanyForm, value: string) => {
+    clearError(field)
+    setFormData((p) => ({ ...p, [field]: value }))
+  }
+
+  /** The inline add-company panel is a form too, so closing it asks first. */
+  const closeAddForm = async () => {
+    const dirty = JSON.stringify(formData) !== JSON.stringify(NEW_COMPANY)
+    if (dirty) {
+      const discard = await confirm({
+        title: 'Discard this company?',
+        message: 'You haven’t saved what you typed yet. Closing the form now will lose it.',
+        confirmLabel: 'Discard',
+        cancelLabel: 'Keep editing',
+        tone: 'warning',
+      })
+      if (!discard) return
+    }
+    setFormData(NEW_COMPANY)
+    setShowForm(false)
+  }
   const [submitting, setSubmitting] = useState(false)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -153,12 +196,17 @@ export default function Companies() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!validate(NEW_COMPANY_RULES, formData)) return
     setSubmitting(true)
     try {
       await api.post('/companies', formData)
       setShowForm(false)
-      setFormData({ name: '', sector: '', domain: '', location: '', website: '', notes: '' })
+      setFormData(NEW_COMPANY)
+      toast.success(`${formData.name} added`)
       fetchCompanies()
+    } catch (err: any) {
+      // This used to fail silently — the panel just sat there looking idle.
+      toast.error(err?.response?.data?.detail ?? 'Could not add this company. Check your connection and try again.')
     } finally {
       setSubmitting(false)
     }
@@ -207,9 +255,9 @@ export default function Companies() {
             <button
               onClick={() => setShowAutoAllocate(true)}
               className="flex items-center gap-2 border border-primary-200 bg-primary-50 hover:bg-primary-100 text-primary-700 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-              title="Let AI assign unallocated companies to placement officers"
+              title="Propose owners for unallocated companies, ranked by importance"
             >
-              <Sparkles className="w-4 h-4" /> AI Auto-Assign
+              <Sparkles className="w-4 h-4" /> Auto-Assign
             </button>
           )}
           <button
@@ -236,35 +284,52 @@ export default function Companies() {
               This lead will be assigned to you and flagged for the placement head to review.
             </p>
           )}
-          <form onSubmit={handleCreate} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* noValidate hands validation to the app, so the browser never shows its
+              own tooltip bubbles over our fields. */}
+          <form ref={formRef} onSubmit={handleCreate} noValidate className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {(['name', 'sector', 'domain', 'location', 'website'] as const).map((field) => (
-              <div key={field}>
-                <label className="block text-xs font-medium text-gray-600 mb-1 capitalize">{field}{field === 'name' ? ' *' : ''}</label>
-                <input
-                  value={formData[field]}
-                  onChange={(e) => setFormData((p) => ({ ...p, [field]: e.target.value }))}
-                  required={field === 'name'}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  placeholder={field.charAt(0).toUpperCase() + field.slice(1)}
-                />
-              </div>
+              <Field
+                key={field}
+                compact
+                label={<span className="capitalize">{field}</span>}
+                name={field}
+                required={field === 'name'}
+                optional={field !== 'name'}
+                error={errors[field]}
+              >
+                {(p) => (
+                  <input
+                    {...p}
+                    value={formData[field]}
+                    onChange={(e) => updateNew(field, e.target.value)}
+                    className={inputClass(!!errors[field], 'px-3 py-2')}
+                    placeholder={field.charAt(0).toUpperCase() + field.slice(1)}
+                  />
+                )}
+              </Field>
             ))}
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Notes{isOfficer ? ' (context for the placement head)' : ''}
-              </label>
-              <textarea
-                value={formData.notes}
-                onChange={(e) => setFormData((p) => ({ ...p, notes: e.target.value }))}
-                rows={2}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 resize-y"
-                placeholder={isOfficer ? 'e.g. Met their HR at a job fair, open to 2025 batch…' : 'Optional notes'}
-              />
-            </div>
+            <Field
+              compact
+              className="sm:col-span-2"
+              label={`Notes${isOfficer ? ' (context for the placement head)' : ''}`}
+              name="notes"
+              optional
+            >
+              {(p) => (
+                <textarea
+                  {...p}
+                  value={formData.notes}
+                  onChange={(e) => updateNew('notes', e.target.value)}
+                  rows={2}
+                  className={inputClass(false, 'px-3 py-2 resize-y')}
+                  placeholder={isOfficer ? 'e.g. Met their HR at a job fair, open to 2025 batch…' : 'Optional notes'}
+                />
+              )}
+            </Field>
             <div className="sm:col-span-2 flex gap-2 justify-end">
-              <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-              <button type="submit" disabled={submitting} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors">
-                {submitting ? 'Saving...' : 'Save Company'}
+              <button type="button" onClick={closeAddForm} className="min-h-[44px] px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2">Cancel</button>
+              <button type="submit" disabled={submitting} className="min-h-[44px] px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2">
+                {submitting ? 'Saving…' : 'Save Company'}
               </button>
             </div>
           </form>

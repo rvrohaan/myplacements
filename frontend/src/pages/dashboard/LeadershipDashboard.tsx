@@ -7,6 +7,7 @@ import {
   Building2,
   Clock,
   MessageSquare,
+  ClipboardCheck,
   Table2,
   Target,
   UserCheck,
@@ -26,7 +27,12 @@ import {
   YAxis,
 } from 'recharts'
 import api from '@/lib/api'
-import type { ActivityStatus, OfficerPerformance, OfficerPerformanceReport } from '@/types'
+import type {
+  ActivityStatus,
+  DailyDigest,
+  OfficerPerformance,
+  OfficerPerformanceReport,
+} from '@/types'
 import { cn, formatCTC, formatDate } from '@/lib/utils'
 import { DashboardSkeleton, Panel, StatCard } from './StatCard'
 
@@ -88,12 +94,19 @@ export default function LeadershipDashboard() {
   const [sortKey, setSortKey] = useState<SortKey>('offers_won')
   const [view, setView] = useState<View>('chart')
   const [metric, setMetric] = useState<Metric>('work')
+  // Today's filing compliance, for the chip through to the digest. Failure is
+  // silent - the dashboard stands on its own without it.
+  const [digest, setDigest] = useState<DailyDigest | null>(null)
 
   useEffect(() => {
     api
       .get('/analytics/officer-performance')
       .then((r) => setReport(r.data))
       .finally(() => setLoading(false))
+    api
+      .get('/daily-updates/digest')
+      .then((r) => setDigest(r.data))
+      .catch(() => setDigest(null))
   }, [])
 
   const officers = useMemo(() => {
@@ -207,6 +220,26 @@ export default function LeadershipDashboard() {
               <AlertTriangle className="w-4 h-4" />
               {totals.needs_attention} officer{totals.needs_attention === 1 ? '' : 's'} logged nothing in 30 days
             </span>
+          )}
+          {digest && digest.compliance.expected > 0 && (
+            <Link
+              to="/daily-digest"
+              className={cn(
+                'flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors',
+                digest.compliance.missing
+                  ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                  : 'border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100',
+              )}
+            >
+              <ClipboardCheck className="w-4 h-4" />
+              {digest.compliance.filed}/{digest.compliance.expected} daily updates filed today
+              {!!digest.attention.escalations.length && (
+                <span className="font-medium">
+                  &middot; {digest.attention.escalations.length} escalation
+                  {digest.attention.escalations.length === 1 ? '' : 's'}
+                </span>
+              )}
+            </Link>
           )}
         </div>
       )}

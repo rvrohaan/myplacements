@@ -332,8 +332,8 @@ def get_my_work(db: Session = Depends(get_db), current_user: User = Depends(get_
     won_offers = [o for o in offers if o.status in WON_OFFER_STATUSES]
     ctcs = [o.ctc for o in offers if o.ctc]
 
-    # Outreach is attributed either explicitly (officer_id on the log) or through
-    # the company allocation, since logs don't always carry an officer.
+    # Every log touching the officer's companies, whoever wrote it - a head's call
+    # still counts as contact, so staleness stays honest.
     comm_filters = [Communication.officer_id == officer.id]
     if company_ids:
         comm_filters.append(Communication.company_id.in_(company_ids))
@@ -349,12 +349,15 @@ def get_my_work(db: Session = Depends(get_db), current_user: User = Depends(get_
         if when and (c.company_id not in last_contact or when > last_contact[c.company_id]):
             last_contact[c.company_id] = when
 
+    # The officer's own outreach, though, is only what is attributed to them -
+    # somebody else's log on their company is not their activity.
+    my_comms = [c for c in communications if c.officer_id == officer.id]
     comms_30d = sum(
-        1 for c in communications if c.communicated_at and c.communicated_at >= recent_cutoff
+        1 for c in my_comms if c.communicated_at and c.communicated_at >= recent_cutoff
     )
     open_followups = [
         c
-        for c in communications
+        for c in my_comms
         if c.next_followup_date and (c.response_received or "") != "received"
     ]
     overdue = [c for c in open_followups if c.next_followup_date < now]
@@ -413,7 +416,7 @@ def get_my_work(db: Session = Depends(get_db), current_user: User = Depends(get_
             "stale": sum(1 for c in my_companies if c["stale"]),
         },
         "communications": {
-            "total": len(communications),
+            "total": len(my_comms),
             "last_30_days": comms_30d,
             "pending_followups": len(open_followups),
             "overdue_followups": len(overdue),
@@ -601,9 +604,10 @@ def get_officer_performance(
     overdue_followups: dict[int, int] = defaultdict(int)
     last_activity: dict[int, datetime] = {}
     for company_id, comm_officer_id, when, followup, response in comm_rows:
-        # Prefer the officer stamped on the log; fall back to whoever owns the
-        # company it was logged against.
-        owner = comm_officer_id if comm_officer_id in officer_id_set else company_owner.get(company_id)
+        # Credit outreach only to the officer stamped on the log. Logs written by
+        # a head (or by anyone with no officer profile) belong to nobody and are
+        # left out of the comparison rather than inflating the company's owner.
+        owner = comm_officer_id if comm_officer_id in officer_id_set else None
         if owner is None:
             continue
         comms_total[owner] += 1

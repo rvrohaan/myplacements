@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import api from '@/lib/api'
 import type { Officer } from '@/types'
-import { Modal, ModalClose, ModalTitle } from '@/components/ui/modal'
+import { Modal, ModalCancelButton, ModalClose, ModalTitle } from '@/components/ui/modal'
+import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import { numberBetween, type Rules } from '@/lib/validation'
 import { useToast } from '@/components/ui/toast'
 
 /**
@@ -10,6 +12,20 @@ import { useToast } from '@/components/ui/toast'
  * way to change them — and target attainment on the dashboard stuck at 0%.
  * Backed by PUT /officers/{id} (management roles only).
  */
+type OfficerEditForm = {
+  region: string
+  sector_expertise: string
+  target_companies: string
+  target_offers: string
+}
+
+const RULES: Rules<OfficerEditForm> = {
+  target_companies: numberBetween(0, 9999, 'Enter a whole number of companies, 0 or more.', {
+    integer: true,
+  }),
+  target_offers: numberBetween(0, 9999, 'Enter a whole number of offers, 0 or more.', { integer: true }),
+}
+
 export default function EditOfficerModal({
   officer,
   onClose,
@@ -26,16 +42,20 @@ export default function EditOfficerModal({
     target_companies: String(officer.target_companies ?? 0),
     target_offers: String(officer.target_offers ?? 0),
   })
-  const [form, setForm] = useState(buildInitial)
+  const [form, setForm] = useState<OfficerEditForm>(buildInitial)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const { formRef, errors, clearError, validate } = useFieldErrors<OfficerEditForm>()
 
-  const update = (key: keyof ReturnType<typeof buildInitial>, value: string) =>
+  const update = (key: keyof OfficerEditForm, value: string) => {
+    clearError(key)
     setForm((f) => ({ ...f, [key]: value }))
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    if (!validate(RULES, form)) return
     setLoading(true)
     try {
       // OfficerUpdate skips None fields, so send 0 rather than null to clear a
@@ -69,7 +89,9 @@ export default function EditOfficerModal({
         <ModalClose />
       </div>
 
-      <form onSubmit={handleSubmit} className="p-6 space-y-4">
+      {/* noValidate hands validation to the app, so the browser never shows its
+          own tooltip bubbles over our fields. */}
+      <form ref={formRef} onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
         {error && (
           <div role="alert" className="px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
             {error}
@@ -82,57 +104,55 @@ export default function EditOfficerModal({
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label htmlFor="officer-region" className="block text-sm font-medium text-gray-700 mb-1">
-              Region
-            </label>
-            <input
-              id="officer-region"
-              autoFocus
-              value={form.region}
-              onChange={(e) => update('region', e.target.value)}
-              placeholder="e.g. South"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="officer-sector" className="block text-sm font-medium text-gray-700 mb-1">
-              Sector expertise
-            </label>
-            <input
-              id="officer-sector"
-              value={form.sector_expertise}
-              onChange={(e) => update('sector_expertise', e.target.value)}
-              placeholder="e.g. IT, Core"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="officer-target-companies" className="block text-sm font-medium text-gray-700 mb-1">
-              Target companies
-            </label>
-            <input
-              id="officer-target-companies"
-              type="number"
-              min={0}
-              value={form.target_companies}
-              onChange={(e) => update('target_companies', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="officer-target-offers" className="block text-sm font-medium text-gray-700 mb-1">
-              Target offers
-            </label>
-            <input
-              id="officer-target-offers"
-              type="number"
-              min={0}
-              value={form.target_offers}
-              onChange={(e) => update('target_offers', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            />
-          </div>
+          <Field label="Region" name="region" optional>
+            {(p) => (
+              <input
+                {...p}
+                autoFocus
+                value={form.region}
+                onChange={(e) => update('region', e.target.value)}
+                placeholder="e.g. South"
+                className={inputClass(false, 'px-3 py-2')}
+              />
+            )}
+          </Field>
+          <Field label="Sector expertise" name="sector_expertise" optional>
+            {(p) => (
+              <input
+                {...p}
+                value={form.sector_expertise}
+                onChange={(e) => update('sector_expertise', e.target.value)}
+                placeholder="e.g. IT, Core"
+                className={inputClass(false, 'px-3 py-2')}
+              />
+            )}
+          </Field>
+          <Field label="Target companies" name="target_companies" error={errors.target_companies}>
+            {(p) => (
+              <input
+                {...p}
+                type="number"
+                min={0}
+                inputMode="numeric"
+                value={form.target_companies}
+                onChange={(e) => update('target_companies', e.target.value)}
+                className={inputClass(!!errors.target_companies, 'px-3 py-2')}
+              />
+            )}
+          </Field>
+          <Field label="Target offers" name="target_offers" error={errors.target_offers}>
+            {(p) => (
+              <input
+                {...p}
+                type="number"
+                min={0}
+                inputMode="numeric"
+                value={form.target_offers}
+                onChange={(e) => update('target_offers', e.target.value)}
+                className={inputClass(!!errors.target_offers, 'px-3 py-2')}
+              />
+            )}
+          </Field>
         </div>
         <p className="text-xs text-gray-400">
           Targets drive the “Target attainment” view on the placement head’s dashboard. Leave a
@@ -140,13 +160,7 @@ export default function EditOfficerModal({
         </p>
 
         <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium py-2.5 rounded-lg text-sm transition-colors"
-          >
-            Cancel
-          </button>
+          <ModalCancelButton className="flex-1" />
           <button
             type="submit"
             disabled={loading}

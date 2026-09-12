@@ -11,7 +11,7 @@ import {
   Target,
 } from 'lucide-react'
 import api from '@/lib/api'
-import type { MyWork } from '@/types'
+import type { DailyUpdateToday, MyWork } from '@/types'
 import { cn, formatCTC, formatDate, STATUS_COLORS } from '@/lib/utils'
 import { DashboardSkeleton, Panel, ProgressRow, StatCard } from './StatCard'
 
@@ -24,6 +24,16 @@ export default function OfficerDashboard() {
   const [work, setWork] = useState<MyWork | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Whether today's daily update is still outstanding. A failure here is silent:
+  // the dashboard is still useful without the nudge.
+  const [updateDue, setUpdateDue] = useState<DailyUpdateToday | null>(null)
+
+  useEffect(() => {
+    api
+      .get('/daily-updates/today')
+      .then((r) => setUpdateDue(r.data))
+      .catch(() => setUpdateDue(null))
+  }, [])
 
   useEffect(() => {
     api
@@ -54,6 +64,19 @@ export default function OfficerDashboard() {
 
   return (
     <div className="space-y-6">
+      {updateDue && !updateDue.existing && (
+        <Link
+          to="/daily-update"
+          className="flex items-center gap-2.5 bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-900 rounded-xl px-4 py-3 text-sm transition-colors"
+        >
+          <Clock className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <span>
+            <span className="font-medium">Today&rsquo;s update isn&rsquo;t filed yet.</span>{' '}
+            It takes a minute &mdash; your call and drive counts are already filled in.
+          </span>
+          <span className="ml-auto font-medium whitespace-nowrap">Due {updateDue.cutoff} &rarr;</span>
+        </Link>
+      )}
       <div>
         <h2 className="text-lg font-semibold text-gray-900">My work</h2>
         <p className="text-sm text-gray-500">

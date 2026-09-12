@@ -4,6 +4,10 @@ import api from '@/lib/api'
 import fetchAll from '@/lib/fetchAll'
 import type { TrainingModule, TrainingRecord, Student } from '@/types'
 import { cn, STATUS_COLORS } from '@/lib/utils'
+import { useConfirm } from '@/components/ui/confirm'
+import { useToast } from '@/components/ui/toast'
+import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import { required, type Rules } from '@/lib/validation'
 
 const CATEGORIES = ['aptitude', 'coding', 'communication', 'mock_interview', 'other']
 const STATUSES = ['enrolled', 'in_progress', 'completed', 'dropped']
@@ -76,16 +80,53 @@ export default function Training() {
   )
 }
 
+type ModuleForm = { name: string; category: string; description: string }
+
+const EMPTY_MODULE_FORM: ModuleForm = { name: '', category: 'aptitude', description: '' }
+
+const MODULE_RULES: Rules<ModuleForm> = {
+  name: required('Name the module, e.g. Quantitative Aptitude.'),
+}
+
 function AddModuleForm({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState({ name: '', category: 'aptitude', description: '' })
+  const [form, setForm] = useState<ModuleForm>(EMPTY_MODULE_FORM)
   const [submitting, setSubmitting] = useState(false)
+  const toast = useToast()
+  const confirm = useConfirm()
+  const { formRef, errors, clearError, validate } = useFieldErrors<ModuleForm>()
+
+  const set = (field: keyof ModuleForm, value: string) => {
+    clearError(field)
+    setForm((p) => ({ ...p, [field]: value }))
+  }
+  /** Inline panels get the same unsaved-changes guard as the modal forms. */
+  const cancel = async () => {
+    const dirty = JSON.stringify(form) !== JSON.stringify(EMPTY_MODULE_FORM)
+    if (dirty) {
+      const discard = await confirm({
+        title: 'Discard your changes?',
+        message: 'You haven’t saved what you typed yet. Closing this form now will lose it.',
+        confirmLabel: 'Discard changes',
+        cancelLabel: 'Keep editing',
+        tone: 'warning',
+      })
+      if (!discard) return
+    }
+    onClose()
+  }
+
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!validate(MODULE_RULES, form)) return
     setSubmitting(true)
     try {
       await api.post('/training/modules', { name: form.name, category: form.category, description: form.description || null })
+      toast.success(`${form.name} created`)
       onSaved()
+    } catch (err: any) {
+      // This used to fail silently — the panel just sat there looking idle.
+      toast.error(err?.response?.data?.detail ?? 'Could not create this module. Check your connection and try again.')
     } finally {
       setSubmitting(false)
     }
@@ -94,24 +135,46 @@ function AddModuleForm({ onClose, onSaved }: { onClose: () => void; onSaved: () 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5">
       <h3 className="font-semibold text-gray-800 mb-4">New Training Module</h3>
-      <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Name *</label>
-          <input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} required className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="e.g. Quantitative Aptitude" />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Category</label>
-          <select value={form.category} onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white capitalize">
-            {CATEGORIES.map((c) => <option key={c} value={c}>{c.replace('_', ' ')}</option>)}
-          </select>
-        </div>
-        <div className="sm:col-span-2">
-          <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
-          <textarea value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-        </div>
+      {/* noValidate hands validation to the app, so the browser never shows its
+          own tooltip bubbles over our fields. */}
+      <form ref={formRef} onSubmit={submit} noValidate className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field compact label="Name" name="name" required error={errors.name}>
+          {(p) => (
+            <input
+              {...p}
+              value={form.name}
+              onChange={(e) => set('name', e.target.value)}
+              className={inputClass(!!errors.name, 'px-3 py-2')}
+              placeholder="e.g. Quantitative Aptitude"
+            />
+          )}
+        </Field>
+        <Field compact label="Category" name="category">
+          {(p) => (
+            <select
+              {...p}
+              value={form.category}
+              onChange={(e) => set('category', e.target.value)}
+              className={inputClass(false, 'px-3 py-2 capitalize')}
+            >
+              {CATEGORIES.map((c) => <option key={c} value={c}>{c.replace('_', ' ')}</option>)}
+            </select>
+          )}
+        </Field>
+        <Field compact className="sm:col-span-2" label="Description" name="description" optional>
+          {(p) => (
+            <textarea
+              {...p}
+              value={form.description}
+              onChange={(e) => set('description', e.target.value)}
+              rows={2}
+              className={inputClass(false, 'px-3 py-2')}
+            />
+          )}
+        </Field>
         <div className="sm:col-span-2 flex gap-2 justify-end">
-          <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-          <button type="submit" disabled={submitting} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors">
+          <button type="button" onClick={cancel} className="min-h-[44px] px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2">Cancel</button>
+          <button type="submit" disabled={submitting} className="min-h-[44px] px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2">
             {submitting ? 'Saving…' : 'Create'}
           </button>
         </div>
@@ -125,6 +188,8 @@ function ProgressPanel({ module, onChanged, onClose }: { module: TrainingModule;
   const [students, setStudents] = useState<Student[]>([])
   const [loading, setLoading] = useState(true)
   const [studentId, setStudentId] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const fetchRecords = () => {
     setLoading(true)
@@ -155,9 +220,27 @@ function ProgressPanel({ module, onChanged, onClose }: { module: TrainingModule;
   }
 
   const remove = async (rec: TrainingRecord) => {
-    await api.delete(`/training/records/${rec.id}`)
-    fetchRecords()
-    onChanged()
+    const ok = await confirm({
+      title: 'Remove this student from the module?',
+      message: (
+        <>
+          <span className="font-medium text-gray-800">{rec.student_name ?? rec.roll_number ?? 'This student'}</span>{' '}
+          will be unenrolled from <span className="font-medium text-gray-800">{module.name}</span>, and their
+          recorded scores and attendance for it will be deleted. This can’t be undone.
+        </>
+      ),
+      confirmLabel: 'Remove student',
+      tone: 'danger',
+    })
+    if (!ok) return
+    try {
+      await api.delete(`/training/records/${rec.id}`)
+      toast.success('Student removed from the module')
+      fetchRecords()
+      onChanged()
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail ?? 'Could not remove this student. Try again.')
+    }
   }
 
   return (

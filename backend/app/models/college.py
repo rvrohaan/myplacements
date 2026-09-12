@@ -15,3 +15,9 @@ class College(Base):
     logo_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # --- Daily updates ------------------------------------------------------
+    # Local "HH:MM" by which officers are expected to file; anything after it is
+    # recorded as late. Also anchors the reminder and digest emails.
+    daily_update_cutoff = Column(String, default="19:00")
+    daily_update_enabled = Column(Boolean, default=True)

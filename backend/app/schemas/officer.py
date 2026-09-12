@@ -67,11 +67,11 @@ class AssignmentOut(BaseModel):
         from_attributes = True
 
 
-# --- AI auto-allocation -----------------------------------------------------
+# --- auto-allocation --------------------------------------------------------
 
 
 class AllocationProposal(BaseModel):
-    """One AI-proposed company → officer allocation, shown for review."""
+    """One proposed company → officer allocation, shown for review."""
 
     company_id: int
     company_name: Optional[str] = None
@@ -86,8 +86,15 @@ class AllocationProposal(BaseModel):
 
 class AllocationPreviewOut(BaseModel):
     proposals: list[AllocationProposal]
+    # Every allocatable company in the college with no owner yet.
     unassigned_count: int
     officer_count: int
+    # How many of those the chosen scope looked at. Proposals are the top
+    # `limit` of these by importance, so considered_count > len(proposals) means
+    # the head is seeing a shortlist and re-running will offer more.
+    considered_count: int = 0
+    scope: str = "pipeline"
+    limit: int = 0
 
 
 class AllocationApplyItem(BaseModel):

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Sparkles, MapPin, Briefcase, ArrowRight } from 'lucide-react'
 import api from '@/lib/api'
-import type { AllocationPreview, AllocationProposal, Officer } from '@/types'
+import type { AllocationPreview, AllocationProposal, AllocationScope, Officer } from '@/types'
 import { cn } from '@/lib/utils'
 import { Modal, ModalClose, ModalTitle } from '@/components/ui/modal'
 
@@ -20,6 +20,14 @@ const PRIORITY_STYLES: Record<string, string> = {
   low: 'bg-gray-100 text-gray-600',
 }
 
+// "Active pipeline" is the set of companies somebody is actually working on.
+// For a college that imported thousands of companies, that is the difference
+// between a reviewable list and an unreadable one.
+const SCOPES: { value: AllocationScope; label: string; hint: string }[] = [
+  { value: 'pipeline', label: 'Active pipeline', hint: 'Priority, active, or with a contact, visit or MOU' },
+  { value: 'all', label: 'Every unassigned', hint: 'Includes untouched imported companies' },
+]
+
 export default function AutoAllocateModal({
   onClose,
   onApplied,
@@ -34,13 +42,14 @@ export default function AutoAllocateModal({
   const [officers, setOfficers] = useState<Officer[]>([])
   const [applying, setApplying] = useState(false)
   const [result, setResult] = useState<string>('')
+  const [scope, setScope] = useState<AllocationScope>('pipeline')
 
-  const runPreview = () => {
+  const runPreview = (nextScope: AllocationScope = scope) => {
     setLoading(true)
     setError('')
     setResult('')
     api
-      .post('/officers/auto-allocate/preview')
+      .post('/officers/auto-allocate/preview', null, { params: { scope: nextScope } })
       .then((r) => {
         const data: AllocationPreview = r.data
         setPreview(data)
@@ -55,6 +64,12 @@ export default function AutoAllocateModal({
       })
       .catch((err) => setError(err?.response?.data?.detail ?? 'Failed to generate allocations'))
       .finally(() => setLoading(false))
+  }
+
+  const changeScope = (next: AllocationScope) => {
+    if (next === scope) return
+    setScope(next)
+    runPreview(next)
   }
 
   useEffect(() => {
@@ -103,13 +118,33 @@ export default function AutoAllocateModal({
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary-600" />
             <div>
-              <ModalTitle className="text-base font-semibold text-gray-900">AI Auto-Assign Companies</ModalTitle>
+              <ModalTitle className="text-base font-semibold text-gray-900">Auto-Assign Companies</ModalTitle>
               <p className="text-xs text-gray-500">
                 Proposals weigh region, sector, relationship, workload, priority, follow-up urgency &amp; targets.
               </p>
             </div>
           </div>
           <ModalClose className="p-0" />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-gray-200 bg-gray-50 px-5 py-2.5">
+          <span className="text-xs text-gray-500 mr-1">Consider:</span>
+          {SCOPES.map((s) => (
+            <button
+              key={s.value}
+              onClick={() => changeScope(s.value)}
+              disabled={loading || applying}
+              title={s.hint}
+              className={cn(
+                'px-2.5 py-1 rounded-md text-xs font-medium border transition disabled:opacity-60',
+                scope === s.value
+                  ? 'border-primary-200 bg-primary-50 text-primary-700'
+                  : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-100'
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
         </div>
 
         <div className="px-5 py-4 max-h-[60vh] overflow-y-auto">
@@ -124,13 +159,23 @@ export default function AutoAllocateModal({
             <p className="text-sm text-gray-500 py-8 text-center">
               {preview && preview.unassigned_count === 0
                 ? 'Every company already has an assigned officer — nothing to allocate.'
-                : 'The AI returned no allocations.'}
+                : scope === 'pipeline'
+                  ? `No company in the active pipeline is unassigned. ${preview?.unassigned_count ?? 0} untouched compan${preview?.unassigned_count === 1 ? 'y is' : 'ies are'} still unowned — switch to “Every unassigned” to allocate them.`
+                  : 'Nothing left to allocate.'}
             </p>
           ) : (
             <>
               <p className="text-xs text-gray-500 mb-3">
                 {preview?.unassigned_count} unassigned compan{preview?.unassigned_count === 1 ? 'y' : 'ies'} across{' '}
-                {preview?.officer_count} officer{preview?.officer_count === 1 ? '' : 's'}. Review, adjust, then apply.
+                {preview?.officer_count} officer{preview?.officer_count === 1 ? '' : 's'}.{' '}
+                {preview && preview.considered_count > rows.length ? (
+                  <>
+                    Showing the {rows.length} most important of {preview.considered_count} in scope — apply these, then
+                    re-run for the next {Math.min(preview.considered_count - rows.length, rows.length)}.
+                  </>
+                ) : (
+                  <>Review, adjust, then apply.</>
+                )}
               </p>
               <div className="space-y-2">
                 {rows.map((row) => {
@@ -214,7 +259,7 @@ export default function AutoAllocateModal({
           <div className="flex items-center gap-2">
             {!loading && !error && rows.length > 0 && (
               <button
-                onClick={runPreview}
+                onClick={() => runPreview()}
                 disabled={applying}
                 className="px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-60"
               >

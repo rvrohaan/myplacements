@@ -1,11 +1,12 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, func, or_
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_roles
-from app.models.company import Company, CompanyStatus
+from app.models.company import Company, CompanyStatus, HRContact
 from app.models.officer import CompanyAssignment, PlacementOfficer
 from app.models.user import User, UserRole
 from app.schemas.officer import (
@@ -20,7 +21,7 @@ from app.schemas.officer import (
     OfficerOut,
     OfficerUpdate,
 )
-from app.services.ai_service import suggest_company_allocations
+from app.services.allocation import NO_MOU, propose_allocations
 
 router = APIRouter(prefix="/officers", tags=["officers"])
 
@@ -32,14 +33,48 @@ MANAGE_ROLES = (UserRole.SUPER_ADMIN, UserRole.PRINCIPAL, UserRole.PRO_CHANCELLO
 ASSIGNMENT_STATUSES = {"active", "accepted", "escalated", "completed"}
 
 
-def _serialize_officer(officer: PlacementOfficer) -> OfficerOut:
+# Assignment states that count as work an officer is currently carrying.
+ACTIVE_STATUSES = ("active", "accepted")
+
+
+def _assignment_counts(db: Session, officer_ids: list[int]) -> dict[int, tuple[int, int]]:
+    """(total, active) assignment counts per officer, in one grouped query.
+
+    Counting these off the ``assignments`` relationship loads every assignment
+    row into memory - fine for a demo college, ruinous once three officers own
+    thousands of companies between them.
+    """
+    if not officer_ids:
+        return {}
+    rows = (
+        db.query(
+            CompanyAssignment.officer_id,
+            func.count(CompanyAssignment.id),
+            func.count(CompanyAssignment.id).filter(
+                CompanyAssignment.status.in_(ACTIVE_STATUSES)
+            ),
+        )
+        .filter(CompanyAssignment.officer_id.in_(officer_ids))
+        .group_by(CompanyAssignment.officer_id)
+        .all()
+    )
+    return {officer_id: (total, active) for officer_id, total, active in rows}
+
+
+def _serialize_officer(
+    officer: PlacementOfficer, counts: Optional[tuple[int, int]] = None
+) -> OfficerOut:
     out = OfficerOut.model_validate(officer)
     if officer.user:
         out.officer_name = officer.user.full_name
         out.email = officer.user.email
         out.department = officer.user.department
-    out.assignment_count = len(officer.assignments)
-    out.active_count = sum(1 for a in officer.assignments if a.status in ("active", "accepted"))
+    if counts is None:
+        counts = (
+            len(officer.assignments),
+            sum(1 for a in officer.assignments if a.status in ACTIVE_STATUSES),
+        )
+    out.assignment_count, out.active_count = counts
     return out
 
 
@@ -58,13 +93,15 @@ def list_officers(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = db.query(PlacementOfficer)
+    q = db.query(PlacementOfficer).options(selectinload(PlacementOfficer.user))
     if current_user.college_id:
         q = q.filter(PlacementOfficer.college_id == current_user.college_id)
     # Officers only see their own card; managers see the whole team.
     if current_user.role not in MANAGE_ROLES:
         q = q.filter(PlacementOfficer.user_id == current_user.id)
-    return [_serialize_officer(o) for o in q.all()]
+    officers = q.all()
+    counts = _assignment_counts(db, [o.id for o in officers])
+    return [_serialize_officer(o, counts.get(o.id, (0, 0))) for o in officers]
 
 
 @router.get("/assignable-users", response_model=list[dict])
@@ -85,116 +122,137 @@ def assignable_users(
     ]
 
 
-# --- AI auto-allocation -----------------------------------------------------
+# --- auto-allocation --------------------------------------------------------
 
 # Statuses that should never receive an officer: blacklisted (don't engage) and
-# dormant (inactive). Applied on both the AI input and the apply commit.
+# dormant (inactive). Applied both when proposing and on the apply commit.
 NON_ALLOCATABLE_STATUSES = (CompanyStatus.BLACKLISTED, CompanyStatus.DORMANT)
+
+# How many proposals one run returns. A head reviews these row by row, so the
+# ceiling is what a person can actually read in a sitting - not what the
+# database holds. Applying a batch and re-running picks up where it left off.
+DEFAULT_PREVIEW_LIMIT = 200
+MAX_PREVIEW_LIMIT = 1000
+
+# "pipeline" is the set of companies somebody is actually working: priority or
+# active, or carrying an HR contact, a past visit, or an MOU. "all" adds the
+# long tail of untouched imported companies, which for a large database is most
+# of them.
+PREVIEW_SCOPES = ("pipeline", "all")
 
 
 def _college_officers(db: Session, current_user: User) -> list[PlacementOfficer]:
-    q = db.query(PlacementOfficer)
+    q = db.query(PlacementOfficer).options(selectinload(PlacementOfficer.user))
     if current_user.college_id:
         q = q.filter(PlacementOfficer.college_id == current_user.college_id)
     return q.all()
 
 
-def _unassigned_companies(db: Session, current_user: User) -> list[Company]:
-    """Companies in the college with no officer yet, excluding blacklisted/dormant
-    companies and declined officer leads (none of which should be allocated)."""
-    assigned_ids = {r[0] for r in db.query(CompanyAssignment.company_id).all()}
-    q = db.query(Company)
+def _unassigned_query(db: Session, current_user: User):
+    """Companies in the college with no officer yet, excluding blacklisted and
+    dormant companies and declined officer leads.
+
+    Filtering happens in SQL rather than by walking every row in Python - the
+    whole point of this rewrite is that the query has to survive a database with
+    thousands of companies in it.
+    """
+    q = db.query(Company).filter(
+        ~db.query(CompanyAssignment.company_id)
+        .filter(CompanyAssignment.company_id == Company.id)
+        .exists()
+    )
     if current_user.college_id:
         q = q.filter(Company.college_id == current_user.college_id)
-    return [
-        c
-        for c in q.all()
-        if c.id not in assigned_ids
-        and c.status not in NON_ALLOCATABLE_STATUSES
-        and c.review_status != "declined"
-    ]
+    q = q.filter(
+        or_(Company.status.is_(None), Company.status.notin_(NON_ALLOCATABLE_STATUSES))
+    )
+    # review_status is nullable and NULL means "no review needed", so a plain
+    # != would silently drop every company that was never reviewed.
+    return q.filter(or_(Company.review_status.is_(None), Company.review_status != "declined"))
 
 
-def _company_ai_payload(c: Company) -> dict:
-    strengths = [h.relationship_strength for h in c.hr_contacts if h.relationship_strength]
-    followups = [h.next_followup_date for h in c.hr_contacts if h.next_followup_date]
-    return {
-        "company_id": c.id,
-        "name": c.name,
-        "sector": c.sector,
-        "domain": c.domain,
-        "location": c.location,
-        "status": c.status.value if c.status else None,
-        "mou_status": c.mou_status,
-        "previous_visit_count": c.previous_visit_count or 0,
-        "hr_relationship_strength": max(strengths) if strengths else None,
-        "next_followup_date": min(followups).isoformat() if followups else None,
-        "preferred_branches": c.preferred_branches,
-    }
+def _pipeline_filter(q):
+    """Narrow to companies somebody is actually working.
 
-
-def _officer_ai_payload(o: PlacementOfficer) -> dict:
-    active = sum(1 for a in o.assignments if a.status in ("active", "accepted"))
-    return {
-        "officer_id": o.id,
-        "name": o.user.full_name if o.user else f"Officer #{o.id}",
-        "region": o.region,
-        "sector_expertise": o.sector_expertise,
-        "target_companies": o.target_companies or 0,
-        "current_active_companies": active,
-        "total_assigned": len(o.assignments),
-    }
+    The MOU test uses the same NO_MOU vocabulary the importance score does, so
+    a company marked "Not started" or "Terminated" is not pulled into the
+    pipeline on the strength of a field that records the absence of a deal.
+    """
+    return q.filter(
+        or_(
+            Company.status.in_((CompanyStatus.PRIORITY, CompanyStatus.ACTIVE)),
+            exists().where(HRContact.company_id == Company.id),
+            Company.previous_visit_count > 0,
+            and_(
+                Company.mou_status.isnot(None),
+                func.lower(func.trim(Company.mou_status)).notin_(sorted(NO_MOU)),
+            ),
+        )
+    )
 
 
 @router.post("/auto-allocate/preview", response_model=AllocationPreviewOut)
-async def auto_allocate_preview(
+def auto_allocate_preview(
+    scope: str = Query("pipeline"),
+    limit: int = Query(DEFAULT_PREVIEW_LIMIT, ge=1, le=MAX_PREVIEW_LIMIT),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(*MANAGE_ROLES)),
 ):
-    """Ask the AI to propose an owner for every unassigned company. Read-only —
-    nothing is written; the placement head reviews and applies the result."""
+    """Propose an owner for the unassigned companies most worth owning.
+
+    Read-only - nothing is written; the placement head reviews, edits and
+    applies the result. Companies are ranked by importance and the top ``limit``
+    are returned, so a database with thousands of untouched imports produces a
+    reviewable shortlist instead of an unusable dump.
+    """
+    if scope not in PREVIEW_SCOPES:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid scope. Allowed: {list(PREVIEW_SCOPES)}"
+        )
+
     officers = _college_officers(db, current_user)
     if not officers:
         raise HTTPException(status_code=400, detail="No placement officers to allocate to")
 
-    companies = _unassigned_companies(db, current_user)
-    if not companies:
-        return AllocationPreviewOut(proposals=[], unassigned_count=0, officer_count=len(officers))
+    base = _unassigned_query(db, current_user)
+    unassigned_count = base.with_entities(func.count(Company.id)).scalar() or 0
 
-    raw = await suggest_company_allocations(
-        [_company_ai_payload(c) for c in companies],
-        [_officer_ai_payload(o) for o in officers],
-    )
+    scoped = _pipeline_filter(base) if scope == "pipeline" else base
+    # hr_contacts feeds relationship strength and follow-up urgency for every
+    # company scored, so load them in one extra query instead of one per row.
+    companies = scoped.options(selectinload(Company.hr_contacts)).all()
 
-    company_map = {c.id: c for c in companies}
-    officer_map = {o.id: o for o in officers}
-    proposals: list[AllocationProposal] = []
-    seen: set[int] = set()
-    for item in raw:
-        company = company_map.get(item["company_id"])
-        officer = officer_map.get(item["officer_id"])
-        # Drop hallucinated ids and any duplicate company suggestion.
-        if not company or not officer or company.id in seen:
-            continue
-        seen.add(company.id)
-        proposals.append(
-            AllocationProposal(
-                company_id=company.id,
-                company_name=company.name,
-                company_sector=company.sector,
-                company_location=company.location,
-                company_status=company.status.value if company.status else None,
-                officer_id=officer.id,
-                officer_name=officer.user.full_name if officer.user else f"Officer #{officer.id}",
-                priority=item["priority"],
-                reasoning=item["reasoning"],
-            )
-        )
+    active_counts = {
+        officer_id: active
+        for officer_id, (_total, active) in _assignment_counts(
+            db, [o.id for o in officers]
+        ).items()
+    }
+
+    proposals, considered = propose_allocations(companies, officers, active_counts, limit)
 
     return AllocationPreviewOut(
-        proposals=proposals,
-        unassigned_count=len(companies),
+        proposals=[
+            AllocationProposal(
+                company_id=p.company.id,
+                company_name=p.company.name,
+                company_sector=p.company.sector,
+                company_location=p.company.location,
+                company_status=p.company.status.value if p.company.status else None,
+                officer_id=p.officer.id,
+                officer_name=(
+                    p.officer.user.full_name if p.officer.user else f"Officer #{p.officer.id}"
+                ),
+                priority=p.priority,
+                reasoning=p.reasoning,
+            )
+            for p in proposals
+        ],
+        unassigned_count=unassigned_count,
         officer_count=len(officers),
+        considered_count=considered,
+        scope=scope,
+        limit=limit,
     )
 
 
@@ -206,10 +264,30 @@ def auto_allocate_apply(
 ):
     """Commit the (possibly head-edited) allocations as CompanyAssignments. Each
     is validated against the tenant and skipped if it already exists."""
+    company_ids = {item.company_id for item in payload.allocations}
+    officer_ids = {item.officer_id for item in payload.allocations}
+
+    # Three queries for the whole batch rather than three per row - a head can
+    # apply a couple of hundred allocations at once, and a per-row round-trip to
+    # a hosted database turns that into a minute of waiting.
+    companies = {
+        c.id: c for c in db.query(Company).filter(Company.id.in_(company_ids)).all()
+    }
+    officers = {
+        o.id: o
+        for o in db.query(PlacementOfficer).filter(PlacementOfficer.id.in_(officer_ids)).all()
+    }
+    already_assigned = {
+        row[0]
+        for row in db.query(CompanyAssignment.company_id)
+        .filter(CompanyAssignment.company_id.in_(company_ids))
+        .all()
+    }
+
     created = 0
     skipped = 0
     for item in payload.allocations:
-        company = db.query(Company).filter(Company.id == item.company_id).first()
+        company = companies.get(item.company_id)
         if not company or (current_user.college_id and company.college_id != current_user.college_id):
             skipped += 1
             continue
@@ -218,20 +296,17 @@ def auto_allocate_apply(
         if company.status in NON_ALLOCATABLE_STATUSES:
             skipped += 1
             continue
-        officer = db.query(PlacementOfficer).filter(PlacementOfficer.id == item.officer_id).first()
+        officer = officers.get(item.officer_id)
         if not officer or (current_user.college_id and officer.college_id != current_user.college_id):
             skipped += 1
             continue
         # Single-owner invariant: skip any company already assigned to anyone
-        # (guards against a company allocated since the preview was generated).
-        exists = (
-            db.query(CompanyAssignment)
-            .filter(CompanyAssignment.company_id == item.company_id)
-            .first()
-        )
-        if exists:
+        # (guards against a company allocated since the preview was generated,
+        # and against the same company appearing twice in one payload).
+        if item.company_id in already_assigned:
             skipped += 1
             continue
+        already_assigned.add(item.company_id)
         priority = item.priority if item.priority in ("low", "normal", "high") else "normal"
         db.add(
             CompanyAssignment(

@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ArrowUpRight } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 
 // Soft tinted chips: one hue per metric so the row scans at a glance,
 // all muted so no single card shouts.
@@ -17,24 +18,34 @@ export type Tone = keyof typeof TONES
 
 /**
  * A headline metric. Pass `to` to make the whole card a link through to the page
- * that metric lives on — the card then shows a hover affordance and is reachable
- * by keyboard.
+ * that metric lives on, or `onClick` to make it a toggle that filters a list
+ * further down the same page (`selected` then renders it pressed). Either way
+ * the card shows a hover affordance and is reachable by keyboard.
  */
-export function StatCard({ icon: Icon, label, value, sub, tone, to }: {
+export function StatCard({ icon: Icon, label, value, sub, tone, to, onClick, selected }: {
   icon: React.ElementType
   label: string
   value: string | number
   sub?: string
   tone: Tone
   to?: string
+  onClick?: () => void
+  /** Only meaningful with `onClick`: marks this card as the active filter. */
+  selected?: boolean
 }) {
+  const interactive = !!to || !!onClick
   const body = (
     <>
       <div className="flex items-center justify-between">
         <p className="text-[13px] font-medium text-gray-500 flex items-center gap-1">
           {label}
-          {to && (
-            <ArrowUpRight className="w-3.5 h-3.5 text-gray-300 opacity-0 transition-opacity group-hover:opacity-100" />
+          {interactive && (
+            <ArrowUpRight
+              className={cn(
+                'w-3.5 h-3.5 text-gray-300 transition-opacity group-hover:opacity-100',
+                selected ? 'opacity-100 text-primary-400' : 'opacity-0',
+              )}
+            />
           )}
         </p>
         <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${TONES[tone]}`}>
@@ -47,12 +58,29 @@ export function StatCard({ icon: Icon, label, value, sub, tone, to }: {
   )
 
   const base = 'block bg-white rounded-xl border border-gray-200/70 p-5 shadow-sm transition-shadow hover:shadow-md'
+  const focusable =
+    'transition-colors hover:border-primary-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400'
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={selected}
+        className={cn(
+          'group w-full text-left',
+          base,
+          focusable,
+          selected && 'border-primary-400 ring-2 ring-primary-400/30',
+        )}
+      >
+        {body}
+      </button>
+    )
+  }
   if (!to) return <div className={base}>{body}</div>
   return (
-    <Link
-      to={to}
-      className={`group ${base} transition-colors hover:border-primary-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400`}
-    >
+    <Link to={to} className={cn('group', base, focusable)}>
       {body}
     </Link>
   )

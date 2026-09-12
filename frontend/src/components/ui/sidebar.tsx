@@ -15,6 +15,8 @@ import {
   School,
   UserCog,
   Users,
+  ClipboardCheck,
+  Newspaper,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Link, useLocation } from "react-router-dom";
@@ -86,6 +88,9 @@ const navItems = [
   { to: "/drives", icon: CalendarDays, label: "Drives" },
   { to: "/officers", icon: UserCog, label: "Officers" },
   { to: "/communications", icon: MessagesSquare, label: "Communications" },
+  // filerOnly: the people who owe a daily update. leadershipOnly: who reads them.
+  { to: "/daily-update", icon: ClipboardCheck, label: "Daily Update", filerOnly: true },
+  { to: "/daily-digest", icon: Newspaper, label: "Daily Digest", leadershipOnly: true },
   { to: "/training", icon: BookOpen, label: "Training" },
   { to: "/analytics", icon: BarChart3, label: "Analytics" },
   { to: "/people", icon: Users, label: "People", adminOnly: true },
@@ -109,12 +114,15 @@ export function SessionNavBar() {
   const { user, logout } = useAuthStore();
   const isAdmin = !!user && ADMIN_ROLES.includes(user.role);
   const isOfficer = user?.role === "placement_officer";
+  const isFiler = isOfficer || user?.role === "department_coordinator";
   const adminHost = isAdminHost();
   // The platform console shows only its console tools (Colleges, People); college
   // portals show the data tabs and hide console-only items.
   const visibleNavItems = navItems.filter((item) => {
     if (item.consoleOnly) return adminHost;
     if (adminHost) return item.to === "/people";
+    if (item.filerOnly) return isFiler;
+    if (item.leadershipOnly) return isAdmin;
     return !item.adminOnly || isAdmin;
   });
 

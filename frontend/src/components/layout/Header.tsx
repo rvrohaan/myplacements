@@ -10,6 +10,8 @@ const PAGE_TITLES: Record<string, string> = {
   '/officers': 'Officer Allocation',
   '/communications': 'Communication Tracking',
   '/training': 'Training Monitoring',
+  '/daily-update': 'Daily Update',
+  '/daily-digest': 'Daily Digest',
   '/analytics': 'Analytics',
   '/people': 'People',
   '/colleges': 'Colleges',

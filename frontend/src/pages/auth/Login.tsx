@@ -1,10 +1,27 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BrainCircuit, ShieldCheck } from 'lucide-react'
+import { BrainCircuit, Eye, EyeOff, ShieldCheck } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import api from '@/lib/api'
 import { getSubdomain, isAdminHost } from '@/lib/tenant'
+import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import { email as emailRule, required, type Rules } from '@/lib/validation'
 import type { CollegeBranding } from '@/types'
+
+type Credentials = { email: string; rollNumber: string; password: string }
+
+const STAFF_RULES: Rules<Credentials> = {
+  email: emailRule(
+    'That doesn’t look like an email address — check for a typo.',
+    'Enter the email address you signed up with.',
+  ),
+  password: required('Enter your password.'),
+}
+
+const STUDENT_RULES: Rules<Credentials> = {
+  rollNumber: required('Enter your roll number, e.g. CS21001.'),
+  password: required('Enter your password.'),
+}
 
 export default function Login() {
   const navigate = useNavigate()
@@ -16,6 +33,8 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const { formRef, errors, clearError, validate } = useFieldErrors<Credentials>()
 
   // Resolve the college from the subdomain so the login screen is branded and
   // we can warn when someone lands on an unknown / apex host. The admin console
@@ -36,16 +55,23 @@ export default function Login() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    const isStudent = mode === 'student' && !adminHost
+    if (!validate(isStudent ? STUDENT_RULES : STAFF_RULES, { email, rollNumber, password })) return
     setLoading(true)
     try {
-      const isStudent = mode === 'student' && !adminHost
       const user = isStudent
         ? await studentLogin(rollNumber, password)
         : await login(email, password)
       const home = isStudent ? '/portal' : adminHost ? '/colleges' : '/dashboard'
       navigate(user.must_reset_password ? '/reset-password' : home)
     } catch {
-      setError(mode === 'student' ? 'Invalid roll number or password' : 'Invalid email or password')
+      // Deliberately vague about which half was wrong — naming the field would
+      // tell an attacker which accounts exist.
+      setError(
+        mode === 'student'
+          ? 'That roll number and password don’t match. Check them and try again.'
+          : 'That email and password don’t match. Check them and try again.',
+      )
     } finally {
       setLoading(false)
     }
@@ -101,6 +127,8 @@ export default function Login() {
                 onClick={() => {
                   setMode(m)
                   setError('')
+                  clearError('email')
+                  clearError('rollNumber')
                 }}
                 className={
                   'flex-1 py-1.5 rounded-md capitalize transition-colors ' +
@@ -121,54 +149,85 @@ export default function Login() {
         )}
 
         {error && (
-          <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+          <div
+            role="alert"
+            className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm"
+          >
             {error}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        {/* noValidate keeps the browser's own validation tooltips off the field;
+            the messages below each input say the same thing, in our voice. */}
+        <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-4">
           {mode === 'student' && showStudentToggle ? (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Roll number</label>
-              <input
-                type="text"
-                value={rollNumber}
-                onChange={(e) => setRollNumber(e.target.value)}
-                required
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                placeholder="e.g. CS21001"
-              />
-            </div>
+            <Field label="Roll number" name="rollNumber" required error={errors.rollNumber}>
+              {(p) => (
+                <input
+                  {...p}
+                  type="text"
+                  autoComplete="username"
+                  value={rollNumber}
+                  onChange={(e) => {
+                    clearError('rollNumber')
+                    setRollNumber(e.target.value)
+                  }}
+                  className={inputClass(!!errors.rollNumber)}
+                  placeholder="e.g. CS21001"
+                />
+              )}
+            </Field>
           ) : (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email address</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                placeholder="you@college.edu"
-              />
-            </div>
+            <Field label="Email address" name="email" required error={errors.email}>
+              {(p) => (
+                <input
+                  {...p}
+                  type="email"
+                  autoComplete="username"
+                  value={email}
+                  onChange={(e) => {
+                    clearError('email')
+                    setEmail(e.target.value)
+                  }}
+                  className={inputClass(!!errors.email)}
+                  placeholder="you@college.edu"
+                />
+              )}
+            </Field>
           )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-              placeholder="••••••••"
-            />
-          </div>
+          <Field label="Password" name="password" required error={errors.password}>
+            {(p) => (
+              <div className="relative">
+                <input
+                  {...p}
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => {
+                    clearError('password')
+                    setPassword(e.target.value)
+                  }}
+                  className={inputClass(!!errors.password, 'pr-12')}
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 text-gray-400 hover:text-gray-600 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            )}
+          </Field>
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-primary-600 hover:bg-primary-700 text-white font-medium py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60 shadow-sm shadow-primary-600/25"
+            className="w-full min-h-[44px] bg-primary-600 hover:bg-primary-700 text-white font-medium py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60 shadow-sm shadow-primary-600/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2"
           >
-            {loading ? 'Signing in...' : 'Sign in'}
+            {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
 

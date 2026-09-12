@@ -226,71 +226,6 @@ Return ONLY a JSON array, no prose, in this exact shape:
     return out
 
 
-async def suggest_company_allocations(companies: list[dict], officers: list[dict]) -> list[dict]:
-    """AI-driven bulk allocation of unassigned companies to placement officers.
-
-    Weighs region/sector fit, existing relationship, officer workload vs target,
-    company priority and follow-up urgency. Returns a list of
-    {company_id, officer_id, priority, reasoning} proposals (one per company)."""
-    client = _get_client()
-    prompt = f"""You are the allocation engine for a college placement cell. Assign each
-unassigned company to the single best-fit placement officer, balancing the whole team.
-
-Weigh these factors when deciding the owner:
-- Region: officer.region vs the company's location/region — prefer a regional match.
-- Sector: officer.sector_expertise vs the company's sector/domain — prefer expertise fit.
-- Existing relationship: keep warm relationships with one owner — favour fit where
-  previous_visit_count is high, hr_relationship_strength (1-5) is strong, or there is an MOU.
-- Officer workload: balance current_active_companies against target_companies; spread load
-  and do not overload one officer while others sit idle.
-- Priority companies: company.status == "priority" must go to an officer with strong sector
-  fit and spare capacity; set its allocation priority to "high".
-- Follow-up urgency: a soon or overdue next_followup_date raises the allocation priority.
-- Placement target: treat target_companies as each officer's soft capacity ceiling.
-
-Rules:
-- Assign EVERY company to exactly one officer_id taken from the officers list below.
-- priority must be one of "low", "normal", "high".
-- reasoning: ONE short sentence naming the deciding factor(s).
-
-Unassigned companies:
-{json.dumps(companies, indent=2, default=str)}
-
-Placement officers:
-{json.dumps(officers, indent=2, default=str)}
-
-Return ONLY a JSON array, no prose, in this exact shape:
-[{{"company_id": 1, "officer_id": 2, "priority": "high", "reasoning": "..."}}, ...]"""
-
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    data = _extract_json(message.content[0].text)
-    proposals: list[dict] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        try:
-            company_id = int(item["company_id"])
-            officer_id = int(item["officer_id"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        priority = str(item.get("priority", "normal")).lower()
-        if priority not in ("low", "normal", "high"):
-            priority = "normal"
-        proposals.append(
-            {
-                "company_id": company_id,
-                "officer_id": officer_id,
-                "priority": priority,
-                "reasoning": str(item.get("reasoning", "")).strip(),
-            }
-        )
-    return proposals
-
-
 async def parse_roster_sheet(grid: list[list]) -> list[dict]:
     """Fallback parser for a round roster whose columns we couldn't identify
     deterministically. Hands the raw grid (first row = headers) to Claude and
@@ -366,3 +301,45 @@ Provide a structured review with sections:
         messages=[{"role": "user", "content": prompt}],
     )
     return message.content[0].text
+
+
+async def draft_escalation_reply(
+    escalation_note: str,
+    highlights: Optional[str],
+    blockers: Optional[str],
+    officer_name: str,
+    leader_name: str,
+) -> str:
+    """A first draft of leadership's answer to an escalation raised in a daily update.
+
+    Deliberately short and decisive: this is a reply an officer reads on their
+    phone, and it is a starting point the leader edits before sending, not a
+    message that goes out on its own.
+    """
+    client = _get_client()
+    prompt = f"""You are helping {leader_name}, who leads placements at an Indian
+engineering college, reply to an escalation raised by {officer_name}, one of their
+placement officers, in today's daily update.
+
+The escalation:
+{escalation_note}
+
+What else the officer reported today:
+- Highlights: {highlights or 'nothing recorded'}
+- Blockers: {blockers or 'nothing recorded'}
+
+Draft the reply. Requirements:
+- One or two sentences, under 40 words.
+- Give a clear direction or decision, and name the next action.
+- Plain, direct, collegial - the way a senior colleague answers on a busy day.
+- No greeting, no sign-off, no preamble. Return only the reply text itself.
+- Do not invent facts, dates, names or numbers that are not in the escalation.
+- If the escalation genuinely cannot be decided without more information, ask the
+  one specific question that would unblock it."""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return message.content[0].text.strip()

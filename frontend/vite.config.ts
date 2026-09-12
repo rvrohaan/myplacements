@@ -16,7 +16,9 @@ export default defineConfig({
     allowedHosts: ['.localhost', '.myplacements.in'],
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // Overridable so a second backend (another branch, another agent) can be
+        // driven from its own frontend without editing this file.
+        target: process.env.API_PROXY_TARGET || 'http://localhost:8000',
         changeOrigin: true,
       },
     },

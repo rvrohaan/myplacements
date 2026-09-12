@@ -5,7 +5,35 @@ import fetchAll from '@/lib/fetchAll'
 import { useAuthStore } from '@/store/authStore'
 import type { Officer, Assignment, AssignmentStatus, Company, UserRole } from '@/types'
 import { cn, STATUS_COLORS } from '@/lib/utils'
+import { useConfirm } from '@/components/ui/confirm'
+import { useToast } from '@/components/ui/toast'
+import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import { numberBetween, required, type Rules } from '@/lib/validation'
 import EditOfficerModal from './EditOfficerModal'
+
+type OfficerForm = {
+  user_id: string
+  region: string
+  sector_expertise: string
+  target_companies: string
+  target_offers: string
+}
+
+const EMPTY_OFFICER_FORM: OfficerForm = {
+  user_id: '',
+  region: '',
+  sector_expertise: '',
+  target_companies: '',
+  target_offers: '',
+}
+
+const OFFICER_RULES: Rules<OfficerForm> = {
+  user_id: required('Pick the staff member who will act as this officer.'),
+  target_companies: numberBetween(0, 9999, 'Enter a whole number of companies, 0 or more.', {
+    integer: true,
+  }),
+  target_offers: numberBetween(0, 9999, 'Enter a whole number of offers, 0 or more.', { integer: true }),
+}
 
 const STATUS_FLOW: AssignmentStatus[] = ['active', 'accepted', 'escalated', 'completed']
 // Roles allowed to manage allocations — mirrors the backend's MANAGE_ROLES.
@@ -154,7 +182,30 @@ export default function Officers() {
 
 function AddOfficerForm({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [users, setUsers] = useState<{ id: number; full_name: string; email: string; department?: string }[]>([])
-  const [form, setForm] = useState({ user_id: '', region: '', sector_expertise: '', target_companies: '', target_offers: '' })
+  const [form, setForm] = useState<OfficerForm>(EMPTY_OFFICER_FORM)
+  const confirm = useConfirm()
+  const { formRef, errors, clearError, validate } = useFieldErrors<OfficerForm>()
+
+  const set = (field: keyof OfficerForm, value: string) => {
+    clearError(field)
+    setForm((p) => ({ ...p, [field]: value }))
+  }
+  /** Inline panels get the same unsaved-changes guard as the modal forms. */
+  const cancel = async () => {
+    const dirty = JSON.stringify(form) !== JSON.stringify(EMPTY_OFFICER_FORM)
+    if (dirty) {
+      const discard = await confirm({
+        title: 'Discard your changes?',
+        message: 'You haven’t saved what you typed yet. Closing this form now will lose it.',
+        confirmLabel: 'Discard changes',
+        cancelLabel: 'Keep editing',
+        tone: 'warning',
+      })
+      if (!discard) return
+    }
+    onClose()
+  }
+
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
@@ -164,8 +215,9 @@ function AddOfficerForm({ onClose, onSaved }: { onClose: () => void; onSaved: ()
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setSubmitting(true)
     setError('')
+    if (!validate(OFFICER_RULES, form)) return
+    setSubmitting(true)
     try {
       await api.post('/officers', {
         user_id: parseInt(form.user_id),
@@ -176,7 +228,7 @@ function AddOfficerForm({ onClose, onSaved }: { onClose: () => void; onSaved: ()
       })
       onSaved()
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? 'Failed to add officer')
+      setError(err?.response?.data?.detail ?? 'Could not add this officer. Check your connection and try again.')
     } finally {
       setSubmitting(false)
     }
@@ -185,44 +237,88 @@ function AddOfficerForm({ onClose, onSaved }: { onClose: () => void; onSaved: ()
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5">
       <h3 className="font-semibold text-gray-800 mb-4">Add Placement Officer</h3>
-      {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
-      <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="sm:col-span-2">
-          <label className="block text-xs font-medium text-gray-600 mb-1">Staff member *</label>
-          <select
-            value={form.user_id}
-            onChange={(e) => setForm((p) => ({ ...p, user_id: e.target.value }))}
-            required
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
-          >
-            <option value="" disabled>Select a staff member…</option>
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>{u.full_name} · {u.email}</option>
-            ))}
-          </select>
-          {users.length === 0 && (
-            <p className="text-xs text-gray-400 mt-1">No eligible staff. Create a user with the “placement officer” role on the People tab first.</p>
+      {error && <p role="alert" className="text-sm text-red-600 mb-3">{error}</p>}
+      {/* noValidate hands validation to the app, so the browser never shows its
+          own tooltip bubbles over our fields. */}
+      <form ref={formRef} onSubmit={submit} noValidate className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field
+          compact
+          className="sm:col-span-2"
+          label="Staff member"
+          name="user_id"
+          required
+          error={errors.user_id}
+          hint={
+            users.length === 0
+              ? 'No eligible staff. Create a user with the “placement officer” role on the People tab first.'
+              : undefined
+          }
+        >
+          {(p) => (
+            <select
+              {...p}
+              value={form.user_id}
+              onChange={(e) => set('user_id', e.target.value)}
+              className={inputClass(!!errors.user_id, 'px-3 py-2')}
+            >
+              <option value="" disabled>Select a staff member…</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>{u.full_name} · {u.email}</option>
+              ))}
+            </select>
           )}
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Region</label>
-          <input value={form.region} onChange={(e) => setForm((p) => ({ ...p, region: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="e.g. South" />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Sector expertise</label>
-          <input value={form.sector_expertise} onChange={(e) => setForm((p) => ({ ...p, sector_expertise: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="e.g. IT, Core" />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Target companies</label>
-          <input type="number" value={form.target_companies} onChange={(e) => setForm((p) => ({ ...p, target_companies: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Target offers</label>
-          <input type="number" value={form.target_offers} onChange={(e) => setForm((p) => ({ ...p, target_offers: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-        </div>
+        </Field>
+        <Field compact label="Region" name="region" optional>
+          {(p) => (
+            <input
+              {...p}
+              value={form.region}
+              onChange={(e) => set('region', e.target.value)}
+              className={inputClass(false, 'px-3 py-2')}
+              placeholder="e.g. South"
+            />
+          )}
+        </Field>
+        <Field compact label="Sector expertise" name="sector_expertise" optional>
+          {(p) => (
+            <input
+              {...p}
+              value={form.sector_expertise}
+              onChange={(e) => set('sector_expertise', e.target.value)}
+              className={inputClass(false, 'px-3 py-2')}
+              placeholder="e.g. IT, Core"
+            />
+          )}
+        </Field>
+        <Field compact label="Target companies" name="target_companies" optional error={errors.target_companies}>
+          {(p) => (
+            <input
+              {...p}
+              type="number"
+              min="0"
+              inputMode="numeric"
+              value={form.target_companies}
+              onChange={(e) => set('target_companies', e.target.value)}
+              className={inputClass(!!errors.target_companies, 'px-3 py-2')}
+            />
+          )}
+        </Field>
+        <Field compact label="Target offers" name="target_offers" optional error={errors.target_offers}>
+          {(p) => (
+            <input
+              {...p}
+              type="number"
+              min="0"
+              inputMode="numeric"
+              value={form.target_offers}
+              onChange={(e) => set('target_offers', e.target.value)}
+              className={inputClass(!!errors.target_offers, 'px-3 py-2')}
+            />
+          )}
+        </Field>
         <div className="sm:col-span-2 flex gap-2 justify-end">
-          <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-          <button type="submit" disabled={submitting} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors">
+          <button type="button" onClick={cancel} className="min-h-[44px] px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2">Cancel</button>
+          <button type="submit" disabled={submitting} className="min-h-[44px] px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2">
             {submitting ? 'Saving…' : 'Add Officer'}
           </button>
         </div>
@@ -238,6 +334,8 @@ function AssignmentPanel({ officer, canManage, onChanged, onClose }: { officer: 
   const [companyId, setCompanyId] = useState('')
   const [priority, setPriority] = useState('normal')
   const [assigning, setAssigning] = useState(false)
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const fetchAssignments = () => {
     setLoading(true)
@@ -263,8 +361,11 @@ function AssignmentPanel({ officer, canManage, onChanged, onClose }: { officer: 
     try {
       await api.post(`/officers/${officer.id}/assignments`, { company_id: parseInt(companyId), priority })
       setCompanyId('')
+      toast.success('Company allocated')
       fetchAssignments()
       onChanged()
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail ?? 'Could not allocate this company. Try again.')
     } finally {
       setAssigning(false)
     }
@@ -277,9 +378,27 @@ function AssignmentPanel({ officer, canManage, onChanged, onClose }: { officer: 
   }
 
   const remove = async (a: Assignment) => {
-    await api.delete(`/officers/${officer.id}/assignments/${a.id}`)
-    fetchAssignments()
-    onChanged()
+    const ok = await confirm({
+      title: 'Remove this allocation?',
+      message: (
+        <>
+          <span className="font-medium text-gray-800">{a.company_name ?? `Company #${a.company_id}`}</span>{' '}
+          will go back to the unassigned pool and any notes on this allocation will be lost.
+          You can allocate it again afterwards.
+        </>
+      ),
+      confirmLabel: 'Remove allocation',
+      tone: 'danger',
+    })
+    if (!ok) return
+    try {
+      await api.delete(`/officers/${officer.id}/assignments/${a.id}`)
+      toast.success('Allocation removed')
+      fetchAssignments()
+      onChanged()
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail ?? 'Could not remove this allocation. Try again.')
+    }
   }
 
   const saveNote = async (a: Assignment, notes: string) => {

@@ -8,6 +8,7 @@ from app.models.drive import Drive, DriveParticipant, DriveRound, DriveRoundResu
 from app.models.offer import Offer, OfferStatus
 from app.models.communication import Communication, CommunicationType
 from app.models.training import TrainingModule, StudentTraining
+from app.models.daily_update import DailyUpdate, DailyUpdateRun
 
 __all__ = [
     "College",
@@ -20,4 +21,5 @@ __all__ = [
     "Offer", "OfferStatus",
     "Communication", "CommunicationType",
     "TrainingModule", "StudentTraining",
+    "DailyUpdate", "DailyUpdateRun",
 ]

@@ -45,6 +45,40 @@ _MIGRATIONS = [
     # One-time backfill from the old boolean; the IS NULL guard makes it a no-op
     # on later startups.
     "UPDATE companies SET review_status = 'pending' WHERE pending_review = TRUE AND review_status IS NULL",
+    # Authorship on communication logs, so leadership can see who logged what.
+    "ALTER TABLE communications ADD COLUMN IF NOT EXISTS logged_by_id INTEGER REFERENCES users(id)",
+    "ALTER TABLE communications ADD COLUMN IF NOT EXISTS officer_attribution VARCHAR",
+    "ALTER TABLE communications ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP",
+    "CREATE INDEX IF NOT EXISTS ix_communications_logged_by_id ON communications (logged_by_id)",
+    "CREATE INDEX IF NOT EXISTS ix_communications_officer_id ON communications (officer_id)",
+    "UPDATE communications SET updated_at = created_at WHERE updated_at IS NULL",
+    # Mark anything that already carried an officer as recorded, *before* the
+    # backfill below, so the two can be told apart afterwards.
+    "UPDATE communications SET officer_attribution = 'recorded' "
+    "WHERE officer_id IS NOT NULL AND officer_attribution IS NULL",
+    # Rows logged before authorship existed have no author to recover. Attribute
+    # them to the officer who owns the company (the only signal available) and
+    # flag them inferred, so the officer comparison keeps its history instead of
+    # dropping to zero. Only companies with exactly one owner are touched.
+    # `logged_by_id IS NULL` confines this to those legacy rows: a head's log
+    # written after this ships has an author, and must stay credited to nobody.
+    "UPDATE communications c SET officer_id = a.officer_id, officer_attribution = 'inferred' "
+    "FROM company_assignments a WHERE a.company_id = c.company_id "
+    "AND c.officer_id IS NULL AND c.logged_by_id IS NULL "
+    "AND (SELECT COUNT(*) FROM company_assignments x WHERE x.company_id = c.company_id) = 1",
+    # Daily updates: per-college filing deadline and an on/off switch.
+    "ALTER TABLE colleges ADD COLUMN IF NOT EXISTS daily_update_cutoff VARCHAR",
+    "ALTER TABLE colleges ADD COLUMN IF NOT EXISTS daily_update_enabled BOOLEAN NOT NULL DEFAULT TRUE",
+    "UPDATE colleges SET daily_update_cutoff = '19:00' WHERE daily_update_cutoff IS NULL",
+    # One update per person per day, and one scheduler run per college/day/job.
+    # These indexes live here rather than only on the model because create_all
+    # will not add them to a table that already exists on a redeployed database.
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_daily_updates_person_date "
+    "ON daily_updates (college_id, submitted_by_id, report_date)",
+    "CREATE INDEX IF NOT EXISTS ix_daily_updates_college_date "
+    "ON daily_updates (college_id, report_date)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_daily_update_runs "
+    "ON daily_update_runs (college_id, report_date, kind)",
 ]
 
 # New values for existing native enum types. Stored labels are the enum *member

@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { ToastProvider } from '@/components/ui/toast'
+import { ConfirmProvider } from '@/components/ui/confirm'
 import { useAuthStore } from '@/store/authStore'
 import Layout from '@/components/layout/Layout'
 import Login from '@/pages/auth/Login'
@@ -15,6 +16,8 @@ import Analytics from '@/pages/analytics/Analytics'
 import Officers from '@/pages/officers/Officers'
 import Communications from '@/pages/communications/Communications'
 import Training from '@/pages/training/Training'
+import DailyUpdate from '@/pages/daily/DailyUpdate'
+import DailyDigest from '@/pages/daily/DailyDigest'
 import People from '@/pages/people/People'
 import Colleges from '@/pages/colleges/Colleges'
 import SidebarPreview from '@/pages/SidebarPreview'
@@ -82,6 +85,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
+      <ConfirmProvider>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/reset-password" element={<ResetPasswordRoute />} />
@@ -132,6 +136,11 @@ export default function App() {
           <Route path="officers" element={<CollegeRoute><Officers /></CollegeRoute>} />
           <Route path="communications" element={<CollegeRoute><Communications /></CollegeRoute>} />
           <Route path="training" element={<CollegeRoute><Training /></CollegeRoute>} />
+          <Route path="daily-update" element={<CollegeRoute><DailyUpdate /></CollegeRoute>} />
+          <Route
+            path="daily-digest"
+            element={<CollegeRoute><AdminRoute><DailyDigest /></AdminRoute></CollegeRoute>}
+          />
           <Route path="analytics" element={<CollegeRoute><Analytics /></CollegeRoute>} />
           <Route
             path="people"
@@ -145,6 +154,7 @@ export default function App() {
         )}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </ConfirmProvider>
       </ToastProvider>
     </BrowserRouter>
   )
