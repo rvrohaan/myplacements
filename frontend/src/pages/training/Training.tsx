@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Plus, GraduationCap, Users, Trophy, Trash2 } from 'lucide-react'
 import api from '@/lib/api'
-import fetchAll from '@/lib/fetchAll'
-import type { TrainingModule, TrainingRecord, Student } from '@/types'
+import type { TrainingModule, TrainingRecord } from '@/types'
 import { cn, STATUS_COLORS } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm'
+import AttendanceImport from './AttendanceImport'
 import { useToast } from '@/components/ui/toast'
 import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import SearchSelect, { type SearchOption } from '@/components/ui/search-select'
+import { excluding, searchStudents } from '@/lib/pickers'
 import { required, type Rules } from '@/lib/validation'
 
 const CATEGORIES = ['aptitude', 'coding', 'communication', 'mock_interview', 'other']
@@ -59,6 +61,11 @@ export default function Training() {
                 <GraduationCap className="w-5 h-5 text-primary-500" />
               </div>
               {m.description && <p className="text-xs text-gray-500 line-clamp-2">{m.description}</p>}
+              {m.skills && (
+                <p className="text-xs text-gray-500 mt-1">
+                  <span className="text-gray-400">Teaches:</span> {m.skills}
+                </p>
+              )}
               <div className="flex items-center justify-between text-xs text-gray-500 border-t border-gray-100 pt-2">
                 <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" />{m.enrolled_count} enrolled</span>
                 <span>{m.completed_count} done</span>
@@ -80,9 +87,9 @@ export default function Training() {
   )
 }
 
-type ModuleForm = { name: string; category: string; description: string }
+type ModuleForm = { name: string; category: string; description: string; skills: string }
 
-const EMPTY_MODULE_FORM: ModuleForm = { name: '', category: 'aptitude', description: '' }
+const EMPTY_MODULE_FORM: ModuleForm = { name: '', category: 'aptitude', description: '', skills: '' }
 
 const MODULE_RULES: Rules<ModuleForm> = {
   name: required('Name the module, e.g. Quantitative Aptitude.'),
@@ -121,7 +128,12 @@ function AddModuleForm({ onClose, onSaved }: { onClose: () => void; onSaved: () 
     if (!validate(MODULE_RULES, form)) return
     setSubmitting(true)
     try {
-      await api.post('/training/modules', { name: form.name, category: form.category, description: form.description || null })
+      await api.post('/training/modules', {
+        name: form.name,
+        category: form.category,
+        description: form.description || null,
+        skills: form.skills.trim() || null,
+      })
       toast.success(`${form.name} created`)
       onSaved()
     } catch (err: any) {
@@ -161,6 +173,24 @@ function AddModuleForm({ onClose, onSaved }: { onClose: () => void; onSaved: () 
             </select>
           )}
         </Field>
+        <Field
+          compact
+          className="sm:col-span-2"
+          label="Skills taught"
+          name="skills"
+          optional
+          hint="Comma separated. Completing this module credits students with these skills when matching them to a company — leave it blank and a completion says only that somebody attended."
+        >
+          {(p) => (
+            <input
+              {...p}
+              value={form.skills}
+              onChange={(e) => set('skills', e.target.value)}
+              className={inputClass(false, 'px-3 py-2')}
+              placeholder="e.g. Python, SQL, Data Structures"
+            />
+          )}
+        </Field>
         <Field compact className="sm:col-span-2" label="Description" name="description" optional>
           {(p) => (
             <textarea
@@ -185,9 +215,8 @@ function AddModuleForm({ onClose, onSaved }: { onClose: () => void; onSaved: () 
 
 function ProgressPanel({ module, onChanged, onClose }: { module: TrainingModule; onChanged: () => void; onClose: () => void }) {
   const [records, setRecords] = useState<TrainingRecord[]>([])
-  const [students, setStudents] = useState<Student[]>([])
   const [loading, setLoading] = useState(true)
-  const [studentId, setStudentId] = useState('')
+  const [student, setStudent] = useState<SearchOption | null>(null)
   const confirm = useConfirm()
   const toast = useToast()
 
@@ -198,17 +227,18 @@ function ProgressPanel({ module, onChanged, onClose }: { module: TrainingModule;
 
   useEffect(() => {
     fetchRecords()
-    fetchAll<Student>('/students').then(setStudents).catch(() => {})
   }, [module.id])
 
   const enrolledIds = new Set(records.map((r) => r.student_id))
-  const available = students.filter((s) => !enrolledIds.has(s.id))
+  // Search the server, then drop anyone already on this module — the API can't
+  // know about an enrolment made a second ago and not yet refetched.
+  const findStudents = (query: string) => searchStudents(query).then(excluding(enrolledIds))
 
   const enroll = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!studentId) return
-    await api.post(`/training/modules/${module.id}/students`, { student_id: parseInt(studentId) })
-    setStudentId('')
+    if (!student) return
+    await api.post(`/training/modules/${module.id}/students`, { student_id: student.id })
+    setStudent(null)
     fetchRecords()
     onChanged()
   }
@@ -250,15 +280,24 @@ function ProgressPanel({ module, onChanged, onClose }: { module: TrainingModule;
         <button onClick={onClose} className="text-sm text-gray-400 hover:text-gray-600">Close</button>
       </div>
 
+      <AttendanceImport
+        moduleId={module.id}
+        moduleName={module.name}
+        onImported={() => { fetchRecords(); onChanged() }}
+      />
+
       <form onSubmit={enroll} className="flex items-end gap-2">
         <div className="flex-1 max-w-md">
           <label className="block text-xs font-medium text-gray-600 mb-1">Enroll a student</label>
-          <select value={studentId} onChange={(e) => setStudentId(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
-            <option value="" disabled>Select a student…</option>
-            {available.map((s) => <option key={s.id} value={s.id}>{s.roll_number} · {s.full_name ?? '—'} ({s.branch})</option>)}
-          </select>
+          <SearchSelect
+            value={student}
+            onChange={setStudent}
+            search={findStudents}
+            placeholder="Search by name, roll number or branch…"
+            emptyText="No student matches that"
+          />
         </div>
-        <button type="submit" disabled={!studentId} className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors">
+        <button type="submit" disabled={!student} className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors">
           <Plus className="w-4 h-4" /> Enroll
         </button>
       </form>

@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.timeutil import day_bounds_utc, to_local
+from app.core.timeutil import day_bounds_utc, overdue_before, to_local
 from app.models.communication import Communication
 from app.models.company import Company, CompanyStatus, HRContact
 from app.models.drive import Drive, DriveRound
@@ -443,7 +443,7 @@ def standing_counts(db: Session, college_id: int | None) -> dict:
         .filter(
             _college_clause(Communication, college_id),
             Communication.next_followup_date.isnot(None),
-            Communication.next_followup_date < now,
+            Communication.next_followup_date < overdue_before(),
             or_(
                 Communication.response_received.is_(None),
                 Communication.response_received != "received",

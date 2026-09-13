@@ -706,12 +706,28 @@ def daily_digest_ready(db: Session, *, college_id, day, headline: str) -> int:
 
 
 @_never_fails
-def followups_due(db: Session, *, user: User, college_id, count: int) -> int:
+def followups_due(
+    db: Session, *, user: User, college_id, count: int, detail: str = "", overdue: int = 0
+) -> int:
+    """One standing row per person for what they owe.
+
+    Grouped so a backlog that persists updates the row the officer has not read
+    yet rather than adding one a day; once they read it, tomorrow's is news
+    again. Raised to high priority the moment anything is actually overdue —
+    "due today" is a nudge, "overdue" is a miss.
+    """
     return notify(
         db,
         type="followup.due",
         recipients=[user],
         college_id=college_id,
-        title=f"{count} HR follow-up{'s' if count != 1 else ''} due today",
-        link="/communications",
+        title=f"{count} HR follow-up{'s' if count != 1 else ''} to chase",
+        body=detail or None,
+        link="/hr-contacts",
+        priority=HIGH if overdue else NORMAL,
+        group_key=f"followups:{user.id}",
+        group_title="{count} HR follow-ups to chase",
+        # The daily digest and this reminder would otherwise both mail the same
+        # officer about the same backlog on the same morning.
+        email=False,
     )

@@ -20,8 +20,11 @@ from app.routers import (
     hr_contacts,
     job_leads,
     notifications,
+    offers,
     officers,
     portal,
+    insights,
+    reports,
     students,
     training,
     users,
@@ -55,6 +58,9 @@ app.include_router(colleges.router, prefix="/api")
 app.include_router(companies.router, prefix="/api")
 app.include_router(students.router, prefix="/api")
 app.include_router(drives.router, prefix="/api")
+app.include_router(offers.router, prefix="/api")
+app.include_router(insights.router, prefix="/api")
+app.include_router(reports.router, prefix="/api")
 app.include_router(officers.router, prefix="/api")
 app.include_router(communications.router, prefix="/api")
 app.include_router(hr_contacts.router, prefix="/api")

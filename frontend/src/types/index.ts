@@ -273,6 +273,8 @@ export type DriveStatus = 'upcoming' | 'ongoing' | 'completed' | 'cancelled'
 export interface Drive {
   id: number
   company_id: number
+  /** Resolved server-side, so a list of drives needs no company lookup. */
+  company_name?: string
   job_role: string
   drive_date?: string
   mode: DriveMode
@@ -352,7 +354,10 @@ export type OfferStatus = 'issued' | 'accepted' | 'rejected' | 'joined' | 'dropo
 
 export interface Offer {
   id: number
-  drive_id: number
+  // Absent on an offer recorded outside a drive; both absent on the placeholder
+  // the Students page's "mark as placed" flow maintains.
+  drive_id?: number
+  company_id?: number
   student_id: number
   ctc?: number
   role?: string
@@ -361,7 +366,42 @@ export interface Offer {
   status: OfferStatus
   is_dream_offer: number
   dropout_reason?: string
+  offer_letter_url?: string
   created_at: string
+  // Resolved server-side so a row renders without fetching students/companies.
+  student_name?: string
+  roll_number?: string
+  branch?: string
+  batch_year?: number
+  company_name?: string
+  drive_title?: string
+  is_placeholder: boolean
+  /** How many offers this student holds in total. */
+  offer_count?: number
+}
+
+/** Counts behind the offers screen's summary strip. */
+export interface OfferSummary {
+  total: number
+  issued: number
+  accepted: number
+  joined: number
+  rejected: number
+  dropout: number
+  students_with_offer: number
+  students_with_multiple: number
+  highest_ctc?: number
+  median_ctc?: number
+  avg_ctc?: number
+  /** Of the offers students took, the share that reached joining. */
+  joining_conversion?: number
+  awaiting_joining_date: number
+}
+
+export interface OfferFilterOptions {
+  branches: string[]
+  batch_years: number[]
+  companies: Array<{ id: number; name: string }>
 }
 
 export interface Officer {
@@ -458,6 +498,8 @@ export interface TrainingModule {
   completed_count: number
   avg_score?: number
   avg_attendance?: number
+  /** Comma-separated skills this module teaches; completing it credits them. */
+  skills?: string | null
 }
 
 export interface TrainingRecord {
@@ -828,4 +870,373 @@ export interface PlatformScanStatus {
   last_scan?: JobScan | null
   updated_at?: string | null
   updated_by_name?: string | null
+}
+
+/** `/analytics/offers` — counts **offers**, so a student holding three appears
+    three times. The placement view counts students instead. */
+export interface OfferAnalytics {
+  scope: 'college' | 'officer'
+  batch_year?: number | null
+  headline: {
+    offers: number
+    students_with_offer: number
+    students_with_multiple: number
+    median_ctc?: number | null
+    highest_ctc?: number | null
+    avg_ctc?: number | null
+    joining_conversion?: number | null
+    dropout_rate?: number | null
+    awaiting_joining_date: number
+  }
+  funnel: Array<{ stage: string; count: number }>
+  lost: { rejected: number; dropout: number }
+  by_branch: Array<{
+    branch: string
+    offers: number
+    students: number
+    joined: number
+    median_ctc?: number | null
+    highest_ctc?: number | null
+  }>
+  by_company: Array<{
+    company: string
+    offers: number
+    students: number
+    median_ctc?: number | null
+    highest_ctc?: number | null
+  }>
+  by_role: Array<{ role: string; offers: number; median_ctc?: number | null }>
+  offers_per_student: Array<{ offers: string; students: number }>
+}
+
+/** `/analytics/students` — placement measured against the inputs to it. */
+export interface StudentAnalytics {
+  scope: 'college' | 'officer'
+  batch_year?: number | null
+  headline: {
+    students: number
+    placed?: number
+    placement_rate?: number | null
+    seeking?: number
+    /** Placed students score 100 by definition, so this covers the seeking only. */
+    avg_readiness_of_seeking?: number | null
+  }
+  risk_of_seeking: Array<{ band: string; students: number }>
+  cgpa_bands: Array<{ band: string; students: number; placed: number; placement_rate?: number | null }>
+  backlogs: Array<{ band: string; students: number; placed: number; placement_rate?: number | null }>
+  training: null | {
+    enrolments: number
+    students_trained: number
+    completed: number
+    avg_attendance?: number | null
+    avg_score?: number | null
+    avg_mock_score?: number | null
+    placement_rate_trained?: number | null
+    placement_rate_untrained?: number | null
+  }
+  skills: {
+    placed: Array<{ skill: string; students: number; share?: number | null }>
+    seeking: Array<{ skill: string; students: number; share?: number | null }>
+    gaps: Array<{ skill: string; placed_share: number; seeking_share: number; gap: number }>
+  }
+}
+
+/** One report in the §7 catalogue. `params` names the pickers the UI shows. */
+export interface ReportSpec {
+  id: string
+  name: string
+  description: string
+  params: string[]
+}
+
+export interface ReportCatalogue {
+  batch_years: number[]
+  /** Months the month picker should offer, newest first. */
+  months: Array<{ key: string; label: string }>
+  reports: ReportSpec[]
+}
+
+export interface ReportSection {
+  heading: string
+  columns: string[]
+  rows: Array<Array<string | number | null>>
+  total_row: Array<string | number | null> | null
+  note?: string | null
+}
+
+/** A built report. The .xlsx export renders from the same description, so the
+    screen and the downloaded file cannot disagree. */
+export interface ReportDoc {
+  id: string
+  title: string
+  subtitle?: string | null
+  generated_at: string
+  meta: Array<{ label: string; value: string }>
+  sections: ReportSection[]
+  /** Prose above the tables, when the report has any. Written by the model from
+      the report's own findings and cached; empty until somebody asks for it. */
+  narrative: string[]
+  /** Who wrote the narrative and when — or why there isn't one. */
+  narrative_note?: string | null
+  caveats: string[]
+}
+
+/** Module 6 — a shortlist for one company/role, with its workings. */
+export interface MatchResult {
+  company_id: number
+  company_name: string
+  role_id?: number | null
+  role_title?: string | null
+  criteria: {
+    branches: string[]
+    min_cgpa?: number | null
+    max_backlogs?: number | null
+    skills: string[]
+    batch_year?: number | null
+    /** Which record supplied each criterion: "role" | "company" | "none". */
+    source: Record<string, string>
+  }
+  considered: number
+  eligible: number
+  excluded: Array<{ reason: string; label: string; students: number }>
+  /** What each score component contributed. Shown, so the ranking is arguable. */
+  weights: Record<string, number>
+  skills_used: Array<{ skill: string; weight: number }>
+  shortlist: Array<{
+    student_id: number
+    roll_number: string
+    name?: string | null
+    branch?: string | null
+    batch_year?: number | null
+    cgpa?: number | null
+    backlogs: number
+    readiness_score?: number | null
+    placement_status?: string | null
+    score: number
+    components: Record<string, number>
+    matched_skills: string[]
+    missing_skills: string[]
+    /** Matched skill -> "training" | "certification" | "declared". */
+    skill_evidence?: Record<string, string>
+  }>
+  training_gaps: Array<{ skill: string; students_missing: number; share_missing: number }>
+  past_pattern: {
+    hires: number
+    branches: Array<{ branch: string; students: number }>
+    median_cgpa?: number | null
+    min_cgpa?: number | null
+    common_skills: Array<{ skill: string; students: number }>
+  }
+  /** Present only when the skill weighting came from the model. */
+  ai_summary?: string | null
+  ai_skills?: Array<{ skill: string; weight: number; why: string }> | null
+  ai_error?: string | null
+}
+
+/** One row of an uploaded training attendance sheet, and what happened to it. */
+export interface AttendanceImportRow {
+  roll_number: string
+  name?: string | null
+  matched: boolean
+  action?: string | null
+  student_id?: number | null
+  attendance_percent?: number | null
+  score?: number | null
+  mock_test_score?: number | null
+  status?: string | null
+  note?: string | null
+}
+
+export interface AttendanceImportResult {
+  module_id: number
+  rows: number
+  enrolled: number
+  updated: number
+  unmatched: number
+  used_ai: boolean
+  results: AttendanceImportRow[]
+}
+
+/** `/analytics/companies` — shares its arithmetic with the Company Conversion report. */
+export interface CompanyAnalytics {
+  companies: number
+  status_mix: Array<{ status: string; companies: number }>
+  funnel: Array<{ stage: string; companies: number }>
+  logged: number
+  replied: number
+  reply_rate?: number | null
+  stale: number
+  never_contacted: number
+  unassigned: number
+  without_contacts: number
+  top_companies: Array<{
+    company: string
+    status: string
+    owner: string
+    logged: number
+    reply_rate?: number | null
+    drives: number
+    offers: number
+    students_placed: number
+    engagement?: number | null
+  }>
+  going_quiet: Array<{
+    company: string
+    status: string
+    owner: string
+    days_since_contact?: number | null
+    logged: number
+  }>
+  engagement: Array<{ company: string; score: number; contacts_scored: number }>
+}
+
+/** `/analytics/hr` — channel rates share their definition with the HR report. */
+export interface HRAnalytics {
+  contacts: number
+  logged: number
+  replied: number
+  reply_rate?: number | null
+  awaiting: number
+  channels: Array<{
+    channel: string
+    logged: number
+    replied: number
+    no_response: number
+    awaiting: number
+    reply_rate?: number | null
+  }>
+  engagement: Array<{ band: string; contacts: number }>
+  followups: Array<{ bucket: string; contacts: number }>
+  alerts: Array<{
+    contact: string
+    company: string
+    band: string
+    days_since_contact?: number | null
+    overdue_days?: number | null
+    reason: string
+  }>
+  alert_total: number
+}
+
+/** `/analytics/drives` — round counts are what officers entered, not a recomputation. */
+export interface DriveAnalytics {
+  drives: number
+  batch_year?: number | null
+  by_status: Array<{ status: string; drives: number }>
+  participants: number
+  funnel: Array<{ stage: string; count: number }>
+  lost: { rejected: number; withdrawn: number }
+  rounds: Array<{
+    round: number
+    name: string
+    drives: number
+    appeared: number
+    passed: number
+    dropped: number
+    pass_rate?: number | null
+  }>
+  conversion: {
+    selection_rate?: number | null
+    offers_per_selection?: number | null
+    offers_won: number
+    offer_conversion?: number | null
+  }
+  by_drive: Array<{
+    drive: string
+    status: string
+    participants: number
+    selected: number
+    offers: number
+    selection_rate?: number | null
+  }>
+}
+
+/** `/analytics/risk-calibration` — does the risk score predict placement?
+    Scored on inputs only; the stored band folds in placement status, so
+    validating that against placement would be circular. */
+export interface RiskCalibration {
+  batch_year?: number | null
+  students: number
+  placed: number
+  placement_rate?: number | null
+  excluded_not_seeking: number
+  models: Array<{
+    key: string
+    label: string
+    bands: Array<{
+      band: string
+      students: number
+      placed: number
+      placement_rate?: number | null
+    }>
+    /** Placement rate of the students it called safe, minus those it called
+        at risk. Near zero means the bands carry no information. */
+    separation?: number | null
+  }>
+}
+
+/** `/insights/dashboard` — the dashboard summary.
+
+    `findings` is always present and always computed by rules; `narrative` is the
+    model's write-up of exactly those findings and is empty whenever the model
+    was unavailable or quoted a figure nobody computed. `note` says which. */
+export interface DashboardInsights {
+  narrative: string[]
+  /** False when `findings` are standing in for a write-up — see `note`. */
+  narrated: boolean
+  findings: Array<{
+    key: string
+    severity: 'urgent' | 'watch' | 'good'
+    headline: string
+  }>
+  facts: Record<string, unknown>
+  generated_at?: string | null
+  generated_by?: string | null
+  model?: string | null
+  note?: string | null
+}
+
+/** One skill with every source that backs it, strongest first.
+
+    The distinction is the point: a skill earned by completing a training module
+    is evidence, one an officer typed is a record, one the student typed is a
+    claim. `student_skills` keeps them apart so they can be weighted. */
+export interface SkillWithSources {
+  skill: string
+  label: string
+  sources: Array<{
+    source: 'training' | 'officer' | 'student'
+    evidence?: string | null
+    verified_at?: string | null
+  }>
+}
+
+/** `/analytics/officer-workload` — how evenly the open work is spread.
+
+    Distinct from officer performance, which ranks by what officers have landed
+    and tracks progress against targets. This measures only what officers are
+    currently carrying; it deliberately carries no target comparison, because
+    `assigned / target_companies` already means "attainment" on that table and
+    one ratio cannot mean two things on one page. */
+export interface OfficerWorkload {
+  officers: Array<{
+    officer_id: number
+    user_id?: number | null
+    name: string
+    open_companies: number
+    upcoming_drives: number
+    followups_due: number
+    followups_overdue: number
+    load: number
+    share?: number | null
+  }>
+  total_load: number
+  /** What each officer would hold if the work were split evenly. */
+  fair_share?: number | null
+  /** Busiest minus lightest, in points of share. `null` with fewer than two
+      officers, where the question carries no meaning. */
+  spread?: number | null
+  idle_officers: number
+  unassigned_companies: number
+  weights: Record<string, number>
 }

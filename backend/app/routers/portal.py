@@ -24,7 +24,8 @@ from app.services.ai_service import (
     review_resume,
 )
 
-from app.services import notify
+from app.services import notify, skills
+from app.services.student_scoring import assess
 
 router = APIRouter(prefix="/portal", tags=["portal"])
 
@@ -43,6 +44,64 @@ class ExamPrepRequest(BaseModel):
 @router.get("/me", response_model=StudentOut)
 def my_profile(student: Student = Depends(get_current_student)):
     return student
+
+
+class MyProfileUpdate(BaseModel):
+    """What a student may change about themselves. Deliberately short.
+
+    Skills and the three links, and nothing else. CGPA, backlogs, branch, batch
+    and placement status are the college's record of them and drive the risk
+    score, the shortlists and the reports - a student editing those is editing
+    the figures the college reports to its accreditors.
+    """
+
+    skills: Optional[str] = None
+    resume_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    github_url: Optional[str] = None
+
+
+@router.put("/me", response_model=StudentOut)
+def update_my_profile(
+    payload: MyProfileUpdate,
+    db: Session = Depends(get_db),
+    student: Student = Depends(get_current_student),
+):
+    """A student maintaining their own profile.
+
+    Skills land as ``source="student"`` and stay labelled self-declared for good.
+    They replace only the student's own rows: a skill an officer entered, or one
+    the student earned by completing training, is not theirs to delete - and an
+    officer looking at the shortlist can still see which is which, which is the
+    entire reason ``student_skills`` exists before this endpoint does.
+    """
+    data = payload.model_dump(exclude_unset=True)
+
+    declared = data.pop("skills", None)
+    for field, value in data.items():
+        setattr(student, field, value)
+    if declared is not None:
+        skills.record(db, student, declared, source=skills.STUDENT,
+                      evidence="Added by the student in their portal")
+
+    # Skills feed readiness, so the score has to move with them. Placement status
+    # is read, never written, here.
+    student.readiness_score, student.risk_category = assess(
+        student.cgpa, student.backlogs, student.skills, student.placement_status
+    )
+    db.commit()
+    db.refresh(student)
+    return student
+
+
+@router.get("/me/skills")
+def my_skills(
+    db: Session = Depends(get_db),
+    student: Student = Depends(get_current_student),
+):
+    """The student's own skills with what backs each one, so the portal can show
+    them which of their skills are verified and which are only their word."""
+    return {"skills": skills.grouped(db, student.id)}
 
 
 @router.post("/me/gap-report")

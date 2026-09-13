@@ -35,6 +35,7 @@ import type {
 } from '@/types'
 import { cn, formatCTC, formatDate } from '@/lib/utils'
 import DigestPanel from './DigestPanel'
+import WorkloadPanel from './WorkloadPanel'
 import OpportunitiesPanel from './OpportunitiesPanel'
 import { DashboardSkeleton, Panel, StatCard } from './StatCard'
 
@@ -246,6 +247,12 @@ export default function LeadershipDashboard() {
           )}
         </div>
       )}
+
+      {/* The other half of the officer picture: what each of them is carrying,
+          as opposed to what they have landed. Sits beside the progress table
+          rather than inside it — merging the two would score an officer with a
+          heavy allocation as a poor performer. */}
+      <WorkloadPanel />
 
       <Panel
         title="Officer progress"

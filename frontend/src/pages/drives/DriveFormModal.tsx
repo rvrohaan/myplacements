@@ -4,6 +4,8 @@ import api from '@/lib/api'
 import type { Drive, Company } from '@/types'
 import { Modal, ModalClose, ModalTitle, useModalClose } from '@/components/ui/modal'
 import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import SearchSelect, { type SearchOption } from '@/components/ui/search-select'
+import { searchCompanies } from '@/lib/pickers'
 import { numberBetween, required, type Rules } from '@/lib/validation'
 
 // Turn an ISO timestamp into the value a <input type="datetime-local"> expects.
@@ -52,16 +54,18 @@ const initialFrom = (drive?: Drive): FormState => ({
  */
 export default function DriveFormModal({
   drive,
-  companies,
   onClose,
   onSaved,
 }: {
   drive?: Drive
-  companies: Company[]
   onClose: () => void
   onSaved: (drive: Drive) => void
 }) {
   const isEdit = !!drive
+  // The drive already names its company, so editing needs no lookup to show it.
+  const [company, setCompany] = useState<SearchOption | null>(
+    drive?.company_id ? { id: drive.company_id, label: drive.company_name ?? 'Selected company' } : null,
+  )
   const [form, setForm] = useState<FormState>(() => initialFrom(drive))
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -137,21 +141,19 @@ export default function DriveFormModal({
           hint={isEdit ? 'Fixed once the drive exists' : undefined}
         >
           {(p) => (
-            <select
+            <SearchSelect
               {...p}
-              value={form.company_id}
-              onChange={(e) => set('company_id', e.target.value)}
+              value={company}
+              onChange={(option) => {
+                setCompany(option)
+                set('company_id', option ? String(option.id) : '')
+              }}
+              search={searchCompanies}
               disabled={isEdit}
-              className={inputClass(
-                !!errors.company_id,
-                'px-3 py-2 disabled:bg-gray-100 disabled:text-gray-500',
-              )}
-            >
-              <option value="" disabled>Select a company…</option>
-              {companies.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+              hasError={!!errors.company_id}
+              placeholder="Search companies…"
+              emptyText="No company matches that"
+            />
           )}
         </Field>
         <Field compact label="Job Role" name="job_role" required error={errors.job_role}>

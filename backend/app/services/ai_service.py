@@ -34,7 +34,7 @@ Provide a structured profile with sections: Company Overview, Hiring Pattern, Ty
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    return _response_text(message)
 
 
 async def generate_student_gap_report(student, company_id: Optional[int], db) -> str:
@@ -73,7 +73,7 @@ Provide: 1) Skill gaps identified, 2) Priority improvements, 3) Recommended cert
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    return _response_text(message)
 
 
 async def draft_hr_email(company_name: str, hr_name: str, purpose: str, officer_name: str) -> str:
@@ -93,7 +93,7 @@ Write a concise, professional email suitable for a college placement cell to rea
         max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    return _response_text(message)
 
 
 async def generate_interview_questions(job_role: str, company_name: str, domain: str) -> list[str]:
@@ -110,7 +110,7 @@ Include technical, behavioural, and HR questions. Return as a numbered list."""
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
-    text = message.content[0].text
+    text = _response_text(message)
     lines = [l.strip() for l in text.split("\n") if l.strip() and l.strip()[0].isdigit()]
     return lines
 
@@ -146,7 +146,7 @@ Return ONLY a JSON array, no prose, in this exact shape:
         max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
-    data = _extract_json(message.content[0].text)
+    data = _extract_json(_response_text(message))
     # Keep only well-formed pairs.
     return [
         {"question": str(item["question"]), "answer": str(item["answer"])}
@@ -200,7 +200,7 @@ Return ONLY a JSON array, no prose, in this exact shape:
         max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
-    data = _extract_json(message.content[0].text)
+    data = _extract_json(_response_text(message))
     out: list[dict] = []
     for item in data:
         if not isinstance(item, dict) or not item.get("question"):
@@ -252,7 +252,7 @@ Return ONLY a JSON array, no prose, in this exact shape:
         max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
-    data = _extract_json(message.content[0].text)
+    data = _extract_json(_response_text(message))
     out: list[dict] = []
     for item in data:
         if not isinstance(item, dict) or not item.get("roll_number"):
@@ -301,7 +301,7 @@ Provide a structured review with sections:
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    return _response_text(message)
 
 
 async def draft_escalation_reply(
@@ -343,7 +343,7 @@ Draft the reply. Requirements:
         max_tokens=200,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text.strip()
+    return _response_text(message).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +362,95 @@ Draft the reply. Requirements:
 #   * a server-tool turn can stop with `stop_reason == "pause_turn"` partway
 #     through, which has to be resumed or the answer is silently truncated.
 # ---------------------------------------------------------------------------
+
+# Student-company matching (Module 6). Sonnet is the right point on the curve
+# here: the task is bounded — read a role and weight a short list of skills —
+# and it runs on a button press a placement officer may hit repeatedly.
+MATCH_MODEL = "claude-sonnet-5"
+
+
+async def infer_role_skill_profile(
+    *,
+    company_name: str,
+    sector: Optional[str],
+    domain: Optional[str],
+    role_title: Optional[str],
+    stated_skills: list[str],
+    past_hire_skills: list[str],
+    notes: Optional[str] = None,
+) -> dict:
+    """Which skills matter for this role, and how much.
+
+    This is the only part of matching that is not arithmetic, and it is
+    deliberately narrow: it returns weights, which the deterministic scorer in
+    services/matching.py then applies. It never sees the student list and never
+    ranks anybody — so it cannot quietly become the thing that decides who is
+    shortlisted, and the weights it produces are shown to the user first.
+
+    Returns ``{"skills": [{"skill", "weight", "why"}], "summary": str}``.
+    Weights are 0-1. Raises nothing the caller must handle beyond the usual API
+    errors; a malformed reply yields an empty skill list, and the caller falls
+    back to the stated skills weighted equally.
+    """
+    client = _get_client()
+    stated = ", ".join(stated_skills) if stated_skills else "none recorded"
+    past = ", ".join(past_hire_skills) if past_hire_skills else "no past hires on record"
+    prompt = f"""A college placement cell is shortlisting students for a campus role.
+Decide which skills actually matter for it, and how much each one counts.
+
+Company: {company_name}
+Sector: {sector or 'not recorded'}
+Domain: {domain or 'not recorded'}
+Role: {role_title or 'general hiring, role not specified'}
+Skills the placement cell recorded for this role: {stated}
+Skills commonly listed by students this company has hired before: {past}
+Notes on file: {(notes or 'none')[:500]}
+
+Rules:
+- Include every skill the placement cell recorded, even if you would weight it low.
+- You may add skills that are genuinely standard for this role and sector, but no more
+  than four additions, and only ones a final-year Indian engineering student could
+  plausibly list on a CV.
+- Weight 1.0 means essential, 0.1 means marginal.
+- Keep each "why" to one short clause.
+- Do not invent skills to pad the list. Fewer, well-chosen skills is a better answer.
+
+Return ONLY a JSON object, no prose:
+{{"summary": "one sentence on what this company looks for",
+  "skills": [{{"skill": "python", "weight": 0.9, "why": "core to the stack"}}]}}"""
+
+    message = client.messages.create(
+        model=MATCH_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    # Not content[0]: this model returns a thinking block ahead of its answer, so
+    # indexing the first block reads a ThinkingBlock and raises. Join the text
+    # blocks instead — the same reason the job scan uses this helper.
+    text = "\n".join(_text_blocks(message.content))
+    if not text:
+        return {"skills": [], "summary": ""}
+    data = _extract_json(text)
+    if not isinstance(data, dict):
+        return {"skills": [], "summary": ""}
+
+    skills = []
+    for item in data.get("skills") or []:
+        if not isinstance(item, dict) or not item.get("skill"):
+            continue
+        try:
+            weight = float(item.get("weight", 0.5))
+        except (TypeError, ValueError):
+            weight = 0.5
+        skills.append({
+            "skill": str(item["skill"]).strip().lower(),
+            # Clamp rather than trust: a weight of 40 would silently dominate
+            # every other component of the score.
+            "weight": max(0.05, min(weight, 1.0)),
+            "why": str(item.get("why") or "").strip(),
+        })
+    return {"skills": skills, "summary": str(data.get("summary") or "").strip()}
+
 
 JOB_SCAN_MODEL = "claude-opus-5"
 # Hard ceilings on the billable part. Web search is charged per search on top of
@@ -384,6 +473,18 @@ class ScanUnavailable(RuntimeError):
 
     Distinct from "the scan ran and found nothing", which is a normal result.
     """
+
+
+def _response_text(message) -> str:
+    """Every text block of a reply, joined.
+
+    Never ``content[0].text``: a model with extended thinking puts a
+    ThinkingBlock first, and indexing the first block then raises
+    AttributeError — which is what broke student matching when it moved to
+    Sonnet 5. For a reply that is a single text block this returns exactly the
+    same string, so it is safe everywhere.
+    """
+    return "\n".join(_text_blocks(message.content))
 
 
 def _text_blocks(content) -> list[str]:
@@ -644,3 +745,53 @@ def discover_job_leads(
         )
 
     return leads[:limit], {"searches": searches, "sources": len(seen_urls), "model": JOB_SCAN_MODEL}
+
+
+# --- dashboard narration ------------------------------------------------------
+
+INSIGHT_MODEL = "claude-sonnet-5"
+
+
+class NarrationUnavailable(RuntimeError):
+    """The summary could not be narrated - no key, or the call failed.
+
+    Distinct from "it was narrated badly": a reply that quotes a number nobody
+    supplied is caught by services.insights.verify, not here.
+    """
+
+
+def narrate_dashboard(prompt: str) -> list[str]:
+    """Turn a finished list of findings into two or three paragraphs.
+
+    The prompt is built by services.insights, which also checks what comes back.
+    This function deliberately knows nothing about placement: it is the thin
+    edge that talks to the API, so the rules and the check stay testable without
+    a key. Raises NarrationUnavailable rather than returning empty, so the caller
+    can tell "could not run" from "ran and said nothing".
+    """
+    try:
+        client = _get_client()
+    except Exception as exc:  # no key configured, bad key, SDK failure
+        raise NarrationUnavailable(str(exc)) from exc
+
+    try:
+        message = client.messages.create(
+            model=INSIGHT_MODEL,
+            max_tokens=900,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as exc:
+        raise NarrationUnavailable(str(exc)) from exc
+
+    text = _response_text(message)
+    if not text:
+        raise NarrationUnavailable("empty reply")
+    data = _extract_json(text)
+    if not isinstance(data, dict):
+        raise NarrationUnavailable("reply was not the JSON object asked for")
+    paragraphs = [
+        str(p).strip() for p in (data.get("paragraphs") or []) if str(p).strip()
+    ]
+    if not paragraphs:
+        raise NarrationUnavailable("reply carried no paragraphs")
+    return paragraphs

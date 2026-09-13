@@ -14,6 +14,10 @@ class TrainingModule(Base):
     name = Column(String, nullable=False)
     category = Column(String, nullable=True)
     description = Column(Text, nullable=True)
+    # What the module actually teaches, as a comma-separated list. This is what
+    # turns "completed Aptitude Bootcamp" into evidence a student has a skill:
+    # without it, a completion says somebody attended something and nothing more.
+    skills = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     student_records = relationship(

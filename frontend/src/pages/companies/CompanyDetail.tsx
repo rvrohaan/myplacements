@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Sparkles, Pencil, MessageSquare, AlertCircle, CheckCircle2, XCircle } from 'lucide-react'
+import { ArrowLeft, Sparkles, Pencil, MessageSquare, AlertCircle, CheckCircle2, XCircle, Users } from 'lucide-react'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import { useToast } from '@/components/ui/toast'
@@ -16,6 +16,7 @@ import EditCompanyModal from './EditCompanyModal'
 import HRContactsPanel from './HRContactsPanel'
 import DraftEmailModal from './DraftEmailModal'
 import InterviewQuestionsModal from './InterviewQuestionsModal'
+import MatchStudentsModal from './MatchStudentsModal'
 import RolesPanel from './RolesPanel'
 
 const COMPANY_STATUS_OPTIONS: StatusOption<CompanyStatus>[] = [
@@ -37,6 +38,7 @@ export default function CompanyDetail() {
   const [generating, setGenerating] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [showInterviewQs, setShowInterviewQs] = useState(false)
+  const [showMatch, setShowMatch] = useState(false)
   // Role title the question generator opens on, when launched from a role card.
   const [interviewQsRole, setInterviewQsRole] = useState('')
   const [emailContact, setEmailContact] = useState<HRContact | null>(null)
@@ -118,6 +120,14 @@ export default function CompanyDetail() {
         >
           <MessageSquare className="w-4 h-4" />
           Interview & Exam Qs
+        </button>
+        <button
+          onClick={() => setShowMatch(true)}
+          className="flex items-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg"
+          title="Shortlist students against this company's criteria"
+        >
+          <Users className="w-4 h-4" />
+          Suggest students
         </button>
         <button
           onClick={generateProfile}
@@ -224,6 +234,9 @@ export default function CompanyDetail() {
 
       {showEdit && (
         <EditCompanyModal company={company} onClose={() => setShowEdit(false)} onSaved={setCompany} />
+      )}
+      {showMatch && (
+        <MatchStudentsModal company={company} onClose={() => setShowMatch(false)} />
       )}
       {showInterviewQs && (
         <InterviewQuestionsModal

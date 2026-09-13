@@ -62,6 +62,13 @@ class Drive(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     company = relationship("Company", back_populates="drives")
+
+    @property
+    def company_name(self) -> str | None:
+        """Read-only, so a drive can name its company without every caller
+        holding a company list to look the id up in."""
+        return self.company.name if self.company else None
+
     participants = relationship("DriveParticipant", back_populates="drive", cascade="all, delete-orphan")
     rounds = relationship(
         "DriveRound",

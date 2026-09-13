@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Search, UserPlus, Sparkles, ChevronLeft, ChevronRight, Pencil, KeyRound, Check } from 'lucide-react'
+import { Search, UserPlus, Sparkles, ChevronLeft, ChevronRight, Pencil, KeyRound, Check, X } from 'lucide-react'
 import api from '@/lib/api'
 import type { Student, PlacementStatus, RiskCategory, EnableLoginResult } from '@/types'
+import { SortableHead, useTableSorting, type SortColumn, type Sorting } from '@/components/ui/table-sort'
 import { cn, formatCTC } from '@/lib/utils'
 import AddStudentModal from './AddStudentModal'
 import EditStudentModal from './EditStudentModal'
@@ -25,6 +26,50 @@ const RISK_OPTIONS: StatusOption<RiskCategory>[] = [
   { value: 'high', label: 'high' },
 ]
 
+// Sort keys the API accepts; anything else is rejected server-side.
+type SortKey =
+  | 'full_name'
+  | 'roll_number'
+  | 'branch'
+  | 'batch_year'
+  | 'cgpa'
+  | 'backlogs'
+  | 'skills'
+  | 'placement_status'
+  | 'risk_category'
+  | 'login_enabled'
+
+// The table header, and which column each heading sorts by. Names and codes
+// read best A-Z; the rest open on whatever needs attention first — the highest
+// marks, the most backlogs, the students still unplaced or at high risk, and
+// the logins nobody has switched on yet.
+const COLUMNS: SortColumn<SortKey>[] = [
+  { label: 'Name', sort: 'full_name' },
+  { label: 'Roll No', sort: 'roll_number' },
+  { label: 'Branch', sort: 'branch' },
+  { label: 'Batch', sort: 'batch_year', firstOrder: 'desc' },
+  { label: 'CGPA', sort: 'cgpa', firstOrder: 'desc' },
+  { label: 'Backlogs', sort: 'backlogs', firstOrder: 'desc' },
+  { label: 'Skills', sort: 'skills' },
+  { label: 'Placement', sort: 'placement_status' },
+  { label: 'Risk', sort: 'risk_category' },
+  { label: 'Login', sort: 'login_enabled' },
+  { label: '' },
+]
+
+const SORT_KEYS = COLUMNS.flatMap((c) => (c.sort ? [c.sort] : []))
+
+// Roll number: the order a college's own lists are kept in.
+const DEFAULT_SORTING: Sorting<SortKey> = { sort: 'roll_number', order: 'asc' }
+
+const CGPA_OPTIONS = ['9', '8', '7', '6', '5']
+
+/** Branch and batch values on file, so the filters only offer what exists. */
+type FilterOptions = { branches: string[]; batch_years: number[] }
+
+const selectClass =
+  'px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500'
+
 export default function Students() {
   const toast = useToast()
   const [students, setStudents] = useState<Student[]>([])
@@ -33,6 +78,14 @@ export default function Students() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<PlacementStatus | ''>('')
   const [riskFilter, setRiskFilter] = useState<RiskCategory | ''>('')
+  const [branchFilter, setBranchFilter] = useState('')
+  const [batchFilter, setBatchFilter] = useState('')
+  const [minCgpa, setMinCgpa] = useState('')
+  const [backlogFilter, setBacklogFilter] = useState<'' | 'none' | 'some'>('')
+  const [loginFilter, setLoginFilter] = useState<'' | 'enabled' | 'disabled'>('')
+  // Branch and batch aren't fixed lists — they're whatever the college's own
+  // records hold, so the dropdowns are built from the data.
+  const [options, setOptions] = useState<FilterOptions>({ branches: [], batch_years: [] })
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [placingStudent, setPlacingStudent] = useState<Student | null>(null)
@@ -46,12 +99,56 @@ export default function Students() {
 
   const PAGE_SIZE = 25
 
+  // Sorting is server-side: a page holds 25 of what can be a whole college, so
+  // ordering the rows in the browser would only order the slice on screen.
+  const { sorting, applySort } = useTableSorting<SortKey>({
+    storageKey: 'students:sorting',
+    fallback: DEFAULT_SORTING,
+    keys: SORT_KEYS,
+    onChange: () => setPage(1),
+  })
+  const { sort, order } = sorting
+
   // Searching hits the server, so wait for a pause in typing instead of firing a
   // query per keystroke. Filters change the result set, so restart at page one.
   useEffect(() => {
     const timer = setTimeout(() => { setSearch(searchInput); setPage(1) }, 300)
     return () => clearTimeout(timer)
   }, [searchInput])
+
+  /** Every filter as the API wants it. Shared with export, so a downloaded
+      workbook holds exactly the rows the screen is showing. */
+  const filterParams: Record<string, string> = {
+    ...(search ? { search } : {}),
+    ...(branchFilter ? { branch: branchFilter } : {}),
+    ...(batchFilter ? { batch_year: batchFilter } : {}),
+    ...(minCgpa ? { min_cgpa: minCgpa } : {}),
+    ...(backlogFilter ? { has_backlogs: String(backlogFilter === 'some') } : {}),
+    ...(loginFilter ? { login_enabled: String(loginFilter === 'enabled') } : {}),
+    ...(statusFilter ? { placement_status: statusFilter } : {}),
+    ...(riskFilter ? { risk_category: riskFilter } : {}),
+  }
+
+  const activeFilters = [branchFilter, batchFilter, minCgpa, backlogFilter, loginFilter, statusFilter, riskFilter]
+    .filter(Boolean).length
+
+  const clearFilters = () => {
+    setBranchFilter('')
+    setBatchFilter('')
+    setMinCgpa('')
+    setBacklogFilter('')
+    setLoginFilter('')
+    setStatusFilter('')
+    setRiskFilter('')
+    setSearchInput('')
+    setPage(1)
+  }
+
+  /** Filter dropdowns all behave the same: apply, and go back to page one. */
+  const onFilter = <T,>(set: (value: T) => void) => (e: React.ChangeEvent<HTMLSelectElement>) => {
+    set(e.target.value as T)
+    setPage(1)
+  }
 
   // Responses can land out of order (an early, slower query resolving after a
   // later one); only the newest request is allowed to write to state.
@@ -63,12 +160,12 @@ export default function Students() {
     const requestId = ++latestRequest.current
     setLoading(true)
     const params: Record<string, string> = {
+      ...filterParams,
       skip: String((page - 1) * PAGE_SIZE),
       limit: String(PAGE_SIZE),
+      sort,
+      order,
     }
-    if (search) params.search = search
-    if (statusFilter) params.placement_status = statusFilter
-    if (riskFilter) params.risk_category = riskFilter
     api
       .get('/students', { params })
       .then((r) => {
@@ -85,7 +182,23 @@ export default function Students() {
       })
   }
 
-  useEffect(loadStudents, [search, statusFilter, riskFilter, page])
+  useEffect(loadStudents, [
+    search, statusFilter, riskFilter, branchFilter, batchFilter, minCgpa,
+    backlogFilter, loginFilter, page, sort, order,
+  ])
+
+  // The branch/batch lists only change when students are added or imported.
+  const loadFilterOptions = () => {
+    api.get<FilterOptions>('/students/filter-options')
+      .then((r) => setOptions(r.data))
+      .catch(() => {
+        // Non-fatal: the dropdowns stay empty, every other filter still works.
+      })
+  }
+
+  useEffect(loadFilterOptions, [])
+
+  const onStudentsChanged = () => { loadStudents(); loadFilterOptions() }
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -146,47 +259,104 @@ export default function Students() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search by name, roll no or branch..."
-            className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-          />
+      <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center">
+        <div className="flex flex-wrap items-center gap-2 flex-1">
+          <div className="relative flex-1 min-w-[220px] max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search by name, roll no or branch..."
+              className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+          </div>
+          <select
+            value={branchFilter}
+            onChange={onFilter(setBranchFilter)}
+            aria-label="Filter by branch"
+            className={selectClass}
+          >
+            <option value="">All Branches</option>
+            {options.branches.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+          <select
+            value={batchFilter}
+            onChange={onFilter(setBatchFilter)}
+            aria-label="Filter by batch year"
+            className={selectClass}
+          >
+            <option value="">All Batches</option>
+            {options.batch_years.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={onFilter<PlacementStatus | ''>(setStatusFilter)}
+            aria-label="Filter by placement status"
+            className={selectClass}
+          >
+            <option value="">All Status</option>
+            <option value="unplaced">Unplaced</option>
+            <option value="placed">Placed</option>
+            <option value="opted_out">Opted Out</option>
+            <option value="higher_studies">Higher Studies</option>
+          </select>
+          <select
+            value={riskFilter}
+            onChange={onFilter<RiskCategory | ''>(setRiskFilter)}
+            aria-label="Filter by risk category"
+            className={selectClass}
+          >
+            <option value="">All Risk</option>
+            <option value="low">Low Risk</option>
+            <option value="medium">Medium Risk</option>
+            <option value="high">High Risk</option>
+          </select>
+          <select
+            value={minCgpa}
+            onChange={onFilter(setMinCgpa)}
+            aria-label="Filter by minimum CGPA"
+            className={selectClass}
+          >
+            <option value="">Any CGPA</option>
+            {CGPA_OPTIONS.map((c) => <option key={c} value={c}>{c}+ CGPA</option>)}
+          </select>
+          <select
+            value={backlogFilter}
+            onChange={onFilter<'' | 'none' | 'some'>(setBacklogFilter)}
+            aria-label="Filter by backlogs"
+            className={selectClass}
+          >
+            <option value="">Any Backlogs</option>
+            <option value="none">No backlogs</option>
+            <option value="some">Has backlogs</option>
+          </select>
+          <select
+            value={loginFilter}
+            onChange={onFilter<'' | 'enabled' | 'disabled'>(setLoginFilter)}
+            aria-label="Filter by login status"
+            className={selectClass}
+          >
+            <option value="">Any Login</option>
+            <option value="enabled">Login enabled</option>
+            <option value="disabled">Login not enabled</option>
+          </select>
+          {(activeFilters > 0 || searchInput) && (
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 px-2 py-2 transition-colors"
+              title="Clear the search and every filter"
+            >
+              <X className="w-3.5 h-3.5" />
+              Clear{activeFilters > 0 ? ` (${activeFilters})` : ''}
+            </button>
+          )}
         </div>
-        <select
-          value={statusFilter}
-          onChange={(e) => { setStatusFilter(e.target.value as PlacementStatus | ''); setPage(1) }}
-          className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-        >
-          <option value="">All Status</option>
-          <option value="unplaced">Unplaced</option>
-          <option value="placed">Placed</option>
-          <option value="opted_out">Opted Out</option>
-          <option value="higher_studies">Higher Studies</option>
-        </select>
-        <select
-          value={riskFilter}
-          onChange={(e) => { setRiskFilter(e.target.value as RiskCategory | ''); setPage(1) }}
-          className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-        >
-          <option value="">All Risk</option>
-          <option value="low">Low Risk</option>
-          <option value="medium">Medium Risk</option>
-          <option value="high">High Risk</option>
-        </select>
-        <div className="flex items-start gap-2 sm:ml-auto">
+        <div className="flex items-start gap-2 lg:ml-auto">
           <ImportExportControls
             base="/students"
             label="Students"
-            onImported={loadStudents}
-            exportParams={{
-              ...(search ? { search } : {}),
-              ...(statusFilter ? { placement_status: statusFilter } : {}),
-              ...(riskFilter ? { risk_category: riskFilter } : {}),
-            }}
+            onImported={onStudentsChanged}
+            exportParams={{ ...filterParams, sort, order }}
           />
           <button
             onClick={enableAllShown}
@@ -208,19 +378,13 @@ export default function Students() {
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
-          <thead className="bg-gray-50 border-b border-gray-200">
-            <tr>
-              {['Name', 'Roll No', 'Branch', 'Batch', 'CGPA', 'Backlogs', 'Skills', 'Placement', 'Risk', 'Login', ''].map((h, i) => (
-                <th key={h || i} scope="col" className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h || <span className="sr-only">Actions</span>}</th>
-              ))}
-            </tr>
-          </thead>
+        <table className="w-full min-w-[900px] text-sm">
+          <SortableHead columns={COLUMNS} sorting={sorting} onSort={applySort} />
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={11} className="text-center py-10 text-gray-500">Loading...</td></tr>
+              <tr><td colSpan={COLUMNS.length} className="text-center py-10 text-gray-500">Loading...</td></tr>
             ) : students.length === 0 ? (
-              <tr><td colSpan={11} className="text-center py-10 text-gray-500">No students found</td></tr>
+              <tr><td colSpan={COLUMNS.length} className="text-center py-10 text-gray-500">No students found</td></tr>
             ) : (
               students.map((s) => (
                 <tr key={s.id} className="hover:bg-gray-50 transition-colors">
@@ -335,7 +499,7 @@ export default function Students() {
       )}
 
       {showModal && (
-        <AddStudentModal onClose={() => setShowModal(false)} onCreated={loadStudents} />
+        <AddStudentModal onClose={() => setShowModal(false)} onCreated={onStudentsChanged} />
       )}
       {editingStudent && (
         <EditStudentModal

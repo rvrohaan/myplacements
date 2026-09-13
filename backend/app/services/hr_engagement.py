@@ -24,6 +24,8 @@ both wrong and demoralising; ``None`` renders as "no history yet" instead.
 from datetime import datetime, timedelta
 from typing import Iterable, Optional
 
+from app.core.timeutil import overdue_before, to_local
+
 # Response vocabulary written by routers.communications; mirrored in
 # schemas/communication.py. Anything else counts as "no answer either way".
 RESPONDED = "received"
@@ -117,11 +119,14 @@ def score_contact(communications: Iterable, *, now: Optional[datetime] = None) -
     # Follow-ups we committed to and then let lapse. This one scores *us*, not
     # them, and it belongs here because a contact who stopped replying after
     # three missed follow-ups is a process failure, not a cold lead.
+    # A promise is broken once its *day* has passed, not from midnight on the
+    # morning it was due — see timeutil.overdue_before.
+    late_before = overdue_before(to_local(now).date())
     promised = [c for c in comms if c.next_followup_date]
     overdue = [
         c
         for c in promised
-        if c.next_followup_date < now and (c.response_received or "") != RESPONDED
+        if c.next_followup_date < late_before and (c.response_received or "") != RESPONDED
     ]
     reliability = 1.0 - _clamp(len(overdue) / len(promised)) if promised else 1.0
 

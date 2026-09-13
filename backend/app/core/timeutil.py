@@ -101,3 +101,30 @@ def parse_cutoff(hhmm: str | None, day: date) -> datetime:
 def is_past_cutoff(hhmm: str | None, day: date, at: datetime | None = None) -> bool:
     """Whether ``at`` (default now) falls after ``day``'s cutoff."""
     return (at or local_now()) > parse_cutoff(hhmm, day)
+
+
+def overdue_before(day: date | None = None) -> datetime:
+    """The value before which a *dated* obligation counts as late.
+
+    ``next_followup_date`` is a day, not a moment: it comes from an
+    ``<input type="date">``, so "2026-09-20" is stored as a naive
+    ``2026-09-20 00:00`` — local midnight, never converted to UTC. Two
+    consequences, both of which this function exists to get right:
+
+    * Comparing it against ``now`` makes anything due today read as overdue from
+      one minute past midnight, on the very morning it is due. Late means its
+      *day* has passed.
+    * It must **not** go through :func:`day_bounds_utc`. That shifts by the
+      timezone offset, which is correct for genuine UTC instants
+      (``communicated_at``, ``created_at``) and wrong for this column: in IST it
+      makes every age read a day short, and on a negative offset it would put
+      today's follow-ups back in "overdue" — the bug this replaced.
+
+    So: naive midnight of the local date, compared in the same naive space the
+    column is stored in.
+
+    Used by every surface that says "overdue" so they cannot disagree: the HR
+    directory's filter and summary, the officer dashboard and report, the
+    engagement scorer, the daily metrics and the follow-up reminder.
+    """
+    return datetime.combine(day or local_today(), time.min)

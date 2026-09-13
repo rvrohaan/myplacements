@@ -5,11 +5,15 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import String, case, cast, func
 from sqlalchemy.orm import Session, selectinload
 
+import logging
+
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_roles
 from app.models.communication import Communication
 from app.models.company import Company, CompanyRole, CompanyStatus, HRContact
 from app.models.officer import CompanyAssignment, PlacementOfficer
+from app.models.student import Student
 from app.models.user import User, UserRole
 
 # Roles that manage the company database (bulk import, approving leads).
@@ -30,17 +34,23 @@ from app.schemas.company import (
     HRContactUpdate,
     InterviewQuestionsRequest,
     InterviewQuestionsResponse,
+    MatchRequest,
+    MatchResponse,
 )
+from app.services.matching import build_shortlist, past_pattern, resolve_criteria
 from app.services.ai_service import (
     draft_hr_email,
     generate_company_profile,
     generate_exam_questions,
     generate_interview_questions,
+    infer_role_skill_profile,
 )
 from app.services import notify
 from app.services.excel_io import XLSX_MEDIA_TYPE, Column, build_workbook, parse_rows
 
 router = APIRouter(prefix="/companies", tags=["companies"])
+
+logger = logging.getLogger(__name__)
 
 
 def _officer_company_ids(db: Session, user: User) -> list[int]:
@@ -675,3 +685,99 @@ def delete_company_role(
     role = _get_role(company_id, role_id, db, current_user)
     db.delete(role)
     db.commit()
+
+
+@router.post("/{company_id}/match", response_model=MatchResponse)
+async def match_students(
+    company_id: int,
+    payload: MatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Module 6 — who should we put in front of this company.
+
+    Eligibility is applied as a rule and the ranking is arithmetic; both are
+    returned with their workings. ``use_ai`` only changes which skills count and
+    by how much, and those weights come back in the response so they can be read
+    before they are believed.
+    """
+    company = _accessible_company(company_id, db, current_user)
+
+    role = None
+    if payload.role_id:
+        role = (
+            db.query(CompanyRole)
+            .filter(CompanyRole.id == payload.role_id, CompanyRole.company_id == company.id)
+            .first()
+        )
+        if role is None:
+            raise HTTPException(status_code=404, detail="Role not found for this company")
+
+    criteria = resolve_criteria(company, role, payload.batch_year)
+    pattern = past_pattern(db, company)
+
+    ai_summary: Optional[str] = None
+    ai_skills: Optional[list[dict]] = None
+    ai_error: Optional[str] = None
+    skill_weights: Optional[dict] = None
+
+    if payload.use_ai:
+        if not settings.ANTHROPIC_API_KEY:
+            # Not an error worth failing the request for: the shortlist below is
+            # the same shortlist, scored on the skills already recorded.
+            ai_error = "No API key configured — ranked on the recorded skills instead."
+        else:
+            try:
+                profile = await infer_role_skill_profile(
+                    company_name=company.name,
+                    sector=company.sector,
+                    domain=company.domain,
+                    role_title=role.title if role else None,
+                    stated_skills=criteria.skills,
+                    past_hire_skills=[s for s, _ in pattern.common_skills],
+                    notes=company.notes,
+                )
+                if profile["skills"]:
+                    ai_skills = profile["skills"]
+                    ai_summary = profile["summary"]
+                    skill_weights = {item["skill"]: item["weight"] for item in profile["skills"]}
+                else:
+                    ai_error = "The model returned nothing usable — ranked on the recorded skills."
+            except Exception as exc:  # noqa: BLE001 - surfaced, not swallowed
+                # The class name alone is not diagnosable — an AttributeError
+                # from a response-shape change reads identically to a network
+                # failure. Log the traceback; tell the user what it means for
+                # their shortlist.
+                logger.exception("Skill-profile call failed for company %s", company.id)
+                ai_error = (
+                    f"Could not reach the model ({type(exc).__name__}) — ranked on the "
+                    "recorded skills instead. The server log has the details."
+                )
+
+    students_q = db.query(Student)
+    if current_user.college_id:
+        students_q = students_q.filter(Student.college_id == current_user.college_id)
+    if payload.batch_year:
+        students_q = students_q.filter(Student.batch_year == payload.batch_year)
+
+    result = build_shortlist(
+        db,
+        students_q.all(),
+        company,
+        criteria,
+        skill_weights=skill_weights,
+        include_placed=payload.include_placed,
+        limit=max(1, min(payload.limit, 200)),
+    )
+
+    return {
+        "company_id": company.id,
+        "company_name": company.name,
+        "role_id": role.id if role else None,
+        "role_title": role.title if role else None,
+        "criteria": criteria.to_dict(),
+        **result,
+        "ai_summary": ai_summary,
+        "ai_skills": ai_skills,
+        "ai_error": ai_error,
+    }

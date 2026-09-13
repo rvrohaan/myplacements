@@ -262,6 +262,26 @@ _MIGRATIONS = [
     # join was a sequential scan per contact.
     "CREATE INDEX IF NOT EXISTS ix_communications_hr_contact "
     "ON communications (hr_contact_id) WHERE hr_contact_id IS NOT NULL",
+    # Offer & joining tracking. Offers knew their company only through a drive,
+    # so an off-campus or referral offer had no company at all and the offers
+    # list could not be read company-wise.
+    "ALTER TABLE offers ADD COLUMN IF NOT EXISTS company_id INTEGER REFERENCES companies(id)",
+    "CREATE INDEX IF NOT EXISTS ix_offers_company_id ON offers (company_id)",
+    # student_id was a plain FK with no index; every per-student offer lookup
+    # (and the placement recompute after each write) scanned the table.
+    "CREATE INDEX IF NOT EXISTS ix_offers_student_id ON offers (student_id)",
+    # What a training module teaches, so completing it can credit the student
+    # with those skills (services/matching.py reads this).
+    "ALTER TABLE training_modules ADD COLUMN IF NOT EXISTS skills VARCHAR",
+    # Backfill from the drive the offer came through. The IS NULL guard makes it
+    # a no-op on later startups and never overwrites a company set by hand.
+    """
+    UPDATE offers o
+       SET company_id = d.company_id
+      FROM drives d
+     WHERE o.drive_id = d.id
+       AND o.company_id IS NULL
+    """,
 ]
 
 # New values for existing native enum types. Stored labels are the enum *member

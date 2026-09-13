@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Search, ExternalLink, CheckCircle2, XCircle, UserRound, Sparkles, Briefcase, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { Plus, Search, ExternalLink, CheckCircle2, XCircle, UserRound, Sparkles, Briefcase, ChevronLeft, ChevronRight } from 'lucide-react'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import type { Company, CompanyStatus, UserRole } from '@/types'
 import { cn, formatDate, STATUS_COLORS } from '@/lib/utils'
 import ImportExportControls from '@/components/ImportExportControls'
+import { SortableHead, useTableSorting, type SortColumn, type Sorting } from '@/components/ui/table-sort'
 import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm'
@@ -28,13 +29,14 @@ const NEW_COMPANY_RULES: Rules<NewCompanyForm> = {
 
 const MANAGE_ROLES: UserRole[] = ['super_admin', 'principal', 'pro_chancellor', 'deputy_pro_chancellor']
 
-// Sort keys the API accepts; anything else is rejected server-side.
-type SortKey = 'name' | 'sector' | 'location' | 'salary_max' | 'status' | 'created_at'
-type SortOrder = 'asc' | 'desc'
+// Sort keys the API accepts; anything else is rejected server-side. ('id' - the
+// order rows were added - stays a valid stored value so sessions that chose it
+// before it left the header still work.)
+type SortKey = 'name' | 'sector' | 'location' | 'salary_max' | 'status' | 'created_at' | 'id'
 
 // The table header, and which column each heading sorts by. Text reads best
 // A-Z on first click; money and dates are most useful largest/newest first.
-const COLUMNS: { label: string; sort?: SortKey; firstOrder?: SortOrder }[] = [
+const COLUMNS: SortColumn<SortKey>[] = [
   { label: 'Company', sort: 'name' },
   { label: 'Sector / Domain', sort: 'sector' },
   { label: 'Location', sort: 'location' },
@@ -44,34 +46,9 @@ const COLUMNS: { label: string; sort?: SortKey; firstOrder?: SortOrder }[] = [
   { label: '' },
 ]
 
-type Sorting = { sort: SortKey | 'id'; order: SortOrder }
-
-// A-Z by name: the order people scan a company list in. ('id' - the order rows
-// were added - stays a valid stored value so sessions that chose it still work.)
-const DEFAULT_SORTING: Sorting = { sort: 'name', order: 'asc' }
-const SORT_STORAGE_KEY = 'companies:sorting'
-const SORT_KEYS: (SortKey | 'id')[] = ['id', ...COLUMNS.flatMap((c) => (c.sort ? [c.sort] : []))]
-
-/**
- * The sort the user last chose, remembered for the browser session so opening a
- * company and coming back lands on the same ordering. sessionStorage rather than
- * localStorage: a new tab starts from the default. Anything unreadable or stale
- * falls back to the default, since an invalid key would make the API 422.
- */
-function storedSorting(): Sorting {
-  try {
-    const raw = sessionStorage.getItem(SORT_STORAGE_KEY)
-    if (raw) {
-      const saved = JSON.parse(raw) as Sorting
-      if (SORT_KEYS.includes(saved.sort) && (saved.order === 'asc' || saved.order === 'desc')) {
-        return saved
-      }
-    }
-  } catch {
-    // Storage disabled or holding something we didn't write - use the default.
-  }
-  return DEFAULT_SORTING
-}
+// A-Z by name: the order people scan a company list in.
+const DEFAULT_SORTING: Sorting<SortKey> = { sort: 'name', order: 'asc' }
+const SORT_KEYS: SortKey[] = ['id', ...COLUMNS.flatMap((c) => (c.sort ? [c.sort] : []))]
 
 /** "3 roles · 2 open" for the list row, or null when none are recorded. */
 function rolesSummary(company: Company): string | null {
@@ -135,7 +112,12 @@ export default function Companies() {
   // Sorting is server-side: a page holds 25 of what can be thousands of
   // companies, so ordering the rows in the browser would only order the slice
   // already on screen.
-  const [sorting, setSorting] = useState<Sorting>(storedSorting)
+  const { sorting, applySort } = useTableSorting<SortKey>({
+    storageKey: 'companies:sorting',
+    fallback: DEFAULT_SORTING,
+    keys: SORT_KEYS,
+    onChange: () => setPage(1),
+  })
   const { sort, order } = sorting
 
   const PAGE_SIZE = 25
@@ -180,26 +162,6 @@ export default function Companies() {
   useEffect(() => { fetchCompanies() }, [search, status, page, sort, order])
 
   const applyStatus = (value: CompanyStatus | '') => { setStatus(value); setPage(1) }
-
-  // Clicking the active column flips direction; a new column starts in its own
-  // most useful direction. Either way the reordered list restarts at page one.
-  const applySort = (key: SortKey, firstOrder: SortOrder = 'asc') => {
-    setSorting((prev) =>
-      prev.sort === key
-        ? { sort: key, order: prev.order === 'asc' ? 'desc' : 'asc' }
-        : { sort: key, order: firstOrder },
-    )
-    setPage(1)
-  }
-
-  // Remember the chosen sort for the rest of the session (see storedSorting).
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sorting))
-    } catch {
-      // Storage unavailable - sorting still works, it just won't be remembered.
-    }
-  }, [sorting])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -347,40 +309,7 @@ export default function Companies() {
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
         <table className="w-full min-w-[880px] text-sm">
-          <thead className="bg-gray-50 border-b border-gray-200">
-            <tr>
-              {COLUMNS.map((col) => {
-                const active = col.sort === sort
-                return (
-                  <th
-                    key={col.label}
-                    aria-sort={active ? (order === 'asc' ? 'ascending' : 'descending') : undefined}
-                    className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide"
-                  >
-                    {col.sort ? (
-                      <button
-                        onClick={() => applySort(col.sort!, col.firstOrder)}
-                        className={cn(
-                          'group flex items-center gap-1 uppercase tracking-wide hover:text-gray-700 transition-colors',
-                          active && 'text-primary-600',
-                        )}
-                        title={`Sort by ${col.label.toLowerCase()}`}
-                      >
-                        {col.label}
-                        {active ? (
-                          order === 'asc' ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />
-                        ) : (
-                          <ChevronsUpDown className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        )}
-                      </button>
-                    ) : (
-                      col.label
-                    )}
-                  </th>
-                )
-              })}
-            </tr>
-          </thead>
+          <SortableHead columns={COLUMNS} sorting={sorting} onSort={applySort} />
           <tbody className="divide-y divide-gray-100">
             {loading ? (
               <tr><td colSpan={COLUMNS.length} className="text-center py-10 text-gray-400">Loading...</td></tr>

@@ -1,19 +1,10 @@
 import { useState } from 'react'
 import { useAuthStore } from '@/store/authStore'
-import type { UserRole } from '@/types'
 import { cn } from '@/lib/utils'
+import { LEADERSHIP_ROLES } from '@/lib/roles'
 import CollegeDashboard from './CollegeDashboard'
 import LeadershipDashboard from './LeadershipDashboard'
 import OfficerDashboard from './OfficerDashboard'
-
-// Placement heads get the team view: how each officer is progressing. Mirrors
-// the backend's LEADERSHIP_ROLES on /analytics/officer-performance.
-const LEADERSHIP_ROLES: UserRole[] = [
-  'super_admin',
-  'principal',
-  'pro_chancellor',
-  'deputy_pro_chancellor',
-]
 
 /**
  * The dashboard is per-user, not one shared page:

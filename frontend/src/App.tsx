@@ -11,6 +11,7 @@ import Companies from '@/pages/companies/Companies'
 import CompanyDetail from '@/pages/companies/CompanyDetail'
 import Students from '@/pages/students/Students'
 import Drives from '@/pages/drives/Drives'
+import Offers from '@/pages/offers/Offers'
 import DriveDetail from '@/pages/drives/DriveDetail'
 import Analytics from '@/pages/analytics/Analytics'
 import Officers from '@/pages/officers/Officers'
@@ -24,7 +25,7 @@ import People from '@/pages/people/People'
 import Colleges from '@/pages/colleges/Colleges'
 import Platform from '@/pages/platform/Platform'
 import Notifications from '@/pages/notifications/Notifications'
-import SidebarPreview from '@/pages/SidebarPreview'
+import Reports from '@/pages/reports/Reports'
 import StudentLayout from '@/pages/portal/StudentLayout'
 import StudentDashboard from '@/pages/portal/StudentDashboard'
 import Practice from '@/pages/portal/Practice'
@@ -110,14 +111,6 @@ export default function App() {
           <Route path="resume" element={<ResumeReview />} />
           <Route path="drives" element={<StudentDrives />} />
         </Route>
-        <Route
-          path="/sidebar-preview"
-          element={
-            <ProtectedRoute>
-              <SidebarPreview />
-            </ProtectedRoute>
-          }
-        />
         {/* The staff app needs a tenant subdomain; the apex only serves marketing. */}
         {IS_APEX && <Route path="/" element={<Landing />} />}
         {!IS_APEX && (
@@ -143,6 +136,7 @@ export default function App() {
           <Route path="students" element={<CollegeRoute><Students /></CollegeRoute>} />
           <Route path="drives" element={<CollegeRoute><Drives /></CollegeRoute>} />
           <Route path="drives/:id" element={<CollegeRoute><DriveDetail /></CollegeRoute>} />
+          <Route path="offers" element={<CollegeRoute><Offers /></CollegeRoute>} />
           <Route path="officers" element={<CollegeRoute><Officers /></CollegeRoute>} />
           <Route path="communications" element={<CollegeRoute><Communications /></CollegeRoute>} />
           <Route path="hr-contacts" element={<CollegeRoute><HRContacts /></CollegeRoute>} />
@@ -156,6 +150,9 @@ export default function App() {
               action buttons are gated inside the page. */}
           <Route path="opportunities" element={<CollegeRoute><Opportunities /></CollegeRoute>} />
           <Route path="analytics" element={<CollegeRoute><Analytics /></CollegeRoute>} />
+          {/* Reports cover the whole college, so they follow the same role gate
+              the API enforces: leadership only. */}
+          <Route path="reports" element={<CollegeRoute><AdminRoute><Reports /></AdminRoute></CollegeRoute>} />
           <Route
             path="people"
             element={

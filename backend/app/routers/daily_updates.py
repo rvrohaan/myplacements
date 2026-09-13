@@ -43,6 +43,7 @@ from app.schemas.daily_update import (
     DailyUpdateUpdate,
 )
 from app.services import notifications, notify
+from app.services.followups import owed_followups, summarise
 from app.services.ai_service import draft_escalation_reply
 from app.services.daily_metrics import (
     TOTAL_KEYS,
@@ -574,31 +575,31 @@ def _send_digest(db: Session, college: College, day: date) -> int:
 
 
 def _notify_followups(db: Session, college: College, day: date) -> int:
-    """One notification per person with HR follow-ups falling due today.
+    """One notification per person with HR follow-ups outstanding.
 
     Deliberately folded into this tick rather than given its own cron endpoint
     and token: the loop below already walks every active college hourly and
     already has a run log to keep a retry idempotent.
+
+    What counts as owed lives in services/followups.py, shared so this reminder
+    and the officer report cannot disagree. It covers **overdue** items, not
+    only today's: a reminder that fires once on the due date and never again is
+    silent about everything an officer missed while they were away.
     """
-    start = datetime.combine(day, time.min)
-    end = start + timedelta(days=1)
-    rows = (
-        db.query(Communication.logged_by_id, func.count(Communication.id))
-        .filter(
-            Communication.college_id == college.id,
-            Communication.logged_by_id.isnot(None),
-            Communication.next_followup_date >= start,
-            Communication.next_followup_date < end,
-        )
-        .group_by(Communication.logged_by_id)
-        .all()
-    )
+    owed = owed_followups(db, college.id, day)
     told = 0
-    for user_id, count in rows:
+    for user_id, entry in owed.items():
         user = db.query(User).filter(User.id == user_id, User.is_active == True).first()  # noqa: E712
         if not user:
             continue
-        told += notify.followups_due(db, user=user, college_id=college.id, count=count)
+        told += notify.followups_due(
+            db,
+            user=user,
+            college_id=college.id,
+            count=entry.total,
+            detail=summarise(entry),
+            overdue=entry.overdue,
+        )
     return told
 
 

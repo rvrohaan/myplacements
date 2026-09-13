@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.timeutil import overdue_before
 from app.models.communication import Communication
 from app.models.company import Company, HRContact
 from app.models.officer import CompanyAssignment, PlacementOfficer
@@ -100,14 +101,19 @@ def list_hr_contacts(
         )
 
     now = datetime.utcnow()
+    # One boundary for all three buckets, so they stay a partition: with
+    # "overdue" moved to the start of the day and "upcoming" left on `now`, a
+    # follow-up dated today would belong to neither and vanish from both filters.
+    late_before = overdue_before()
     if followup == "overdue":
-        q = q.filter(HRContact.next_followup_date.isnot(None), HRContact.next_followup_date < now)
+        q = q.filter(HRContact.next_followup_date.isnot(None),
+                     HRContact.next_followup_date < late_before)
     elif followup == "upcoming":
-        q = q.filter(HRContact.next_followup_date >= now)
+        q = q.filter(HRContact.next_followup_date >= late_before)
     elif followup == "due":
         q = q.filter(
             HRContact.next_followup_date.isnot(None),
-            HRContact.next_followup_date < now + timedelta(days=7),
+            HRContact.next_followup_date < late_before + timedelta(days=7),
         )
     elif followup == "none":
         q = q.filter(HRContact.next_followup_date.is_(None))
@@ -200,14 +206,17 @@ def hr_summary(db: Session = Depends(get_db), current_user: User = Depends(get_c
         q = q.filter(HRContact.company_id.in_(allowed))
 
     now = datetime.utcnow()
-    week = now + timedelta(days=7)
+    late_before = overdue_before()
+    week = late_before + timedelta(days=7)
     return {
         "total": q.count(),
         "overdue": q.filter(
-            HRContact.next_followup_date.isnot(None), HRContact.next_followup_date < now
+            HRContact.next_followup_date.isnot(None),
+            HRContact.next_followup_date < late_before,
         ).count(),
         "due_this_week": q.filter(
-            HRContact.next_followup_date >= now, HRContact.next_followup_date < week
+            HRContact.next_followup_date >= late_before,
+            HRContact.next_followup_date < week,
         ).count(),
         "no_followup": q.filter(HRContact.next_followup_date.is_(None)).count(),
         "never_contacted": q.filter(HRContact.last_contacted_at.is_(None)).count(),

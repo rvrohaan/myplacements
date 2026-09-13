@@ -2,13 +2,12 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, CalendarDays, MapPin, IndianRupee, Users, Layers } from 'lucide-react'
 import api from '@/lib/api'
-import type { Drive, DriveStatus, Company } from '@/types'
+import type { Drive, DriveStatus } from '@/types'
 import { cn, STATUS_COLORS, formatDate, formatCTC } from '@/lib/utils'
 import DriveFormModal from './DriveFormModal'
 
 export default function Drives() {
   const [drives, setDrives] = useState<Drive[]>([])
-  const [companies, setCompanies] = useState<Company[]>([])
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState<DriveStatus | ''>('')
   const [showForm, setShowForm] = useState(false)
@@ -22,12 +21,10 @@ export default function Drives() {
 
   useEffect(() => { fetchDrives() }, [statusFilter])
 
-  // Load companies once for the create-drive dropdown and to show names on cards.
-  useEffect(() => {
-    api.get('/companies', { params: { limit: 200 } }).then((r) => setCompanies(r.data)).catch(() => {})
-  }, [])
-
-  const companyName = (id: number) => companies.find((c) => c.id === id)?.name ?? `Company #${id}`
+  // Each drive carries its company's name, so the page no longer loads a
+  // (capped) company list just to label the cards — past that cap they used to
+  // read "Company #412".
+  const companyName = (drive: Drive) => drive.company_name ?? `Company #${drive.company_id}`
 
   return (
     <div className="space-y-4">
@@ -56,7 +53,6 @@ export default function Drives() {
 
       {showForm && (
         <DriveFormModal
-          companies={companies}
           onClose={() => setShowForm(false)}
           onSaved={() => {
             setShowForm(false)
@@ -80,7 +76,7 @@ export default function Drives() {
               <div className="flex items-start justify-between">
                 <div>
                   <p className="font-semibold text-gray-900">{d.job_role}</p>
-                  <p className="text-xs text-gray-500">{companyName(d.company_id)}</p>
+                  <p className="text-xs text-gray-500">{companyName(d)}</p>
                 </div>
                 <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', STATUS_COLORS[d.status])}>
                   {d.status}

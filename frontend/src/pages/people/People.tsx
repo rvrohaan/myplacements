@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Search, UserPlus, CheckCircle2, Ban, RotateCcw, Send } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Search, UserPlus, CheckCircle2, Ban, RotateCcw, Send, ChevronLeft, ChevronRight } from 'lucide-react'
 import api from '@/lib/api'
-import fetchAll from '@/lib/fetchAll'
 import type { Invite, User, UserCreated, UserRole } from '@/types'
 import { formatDate } from '@/lib/utils'
 import { useAuthStore } from '@/store/authStore'
@@ -70,27 +69,64 @@ const ADMIN_HOST = isAdminHost()
 // Table column count for full-width loading/empty rows (+College on the console).
 const COL_COUNT = ADMIN_HOST ? 8 : 7
 
+const PAGE_SIZE = 25
+
 export default function People() {
   const currentUser = useAuthStore((s) => s.user)
   const [users, setUsers] = useState<User[]>([])
   const [colleges, setColleges] = useState<CollegeOption[]>([])
+  // What's typed vs. what's been sent to the server (debounced, see below).
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [reissued, setReissued] = useState<{ user: User; invite: Invite } | null>(null)
   const toast = useToast()
 
-  // Load every staff account so the search box below covers all of them, not
-  // just the first page the endpoint returns by default.
+  // Searching hits the server, so wait for a pause in typing instead of firing a
+  // query per keystroke. A new search restarts at page one.
+  useEffect(() => {
+    const timer = setTimeout(() => { setSearch(searchInput); setPage(1) }, 300)
+    return () => clearTimeout(timer)
+  }, [searchInput])
+
+  // Responses can land out of order (an early, slower query resolving after a
+  // later one); only the newest request is allowed to write to state.
+  const latestRequest = useRef(0)
+
+  // Paged server-side. This used to load *every* staff account up front so the
+  // box below could filter them in the browser — fine for a college with thirty,
+  // a stack of requests for a group with thousands.
   const loadUsers = () => {
+    const requestId = ++latestRequest.current
     setLoading(true)
-    fetchAll<User>('/users')
-      .then(setUsers)
-      .finally(() => setLoading(false))
+    const params: Record<string, string> = {
+      skip: String((page - 1) * PAGE_SIZE),
+      limit: String(PAGE_SIZE),
+      ...(search ? { search } : {}),
+    }
+    api
+      .get<User[]>('/users', { params })
+      .then((r) => {
+        if (requestId !== latestRequest.current) return
+        setUsers(r.data)
+        const count = Number(r.headers['x-total-count'])
+        setTotal(Number.isFinite(count) ? count : r.data.length)
+      })
+      .catch(() => {
+        if (requestId === latestRequest.current) toast.error('Could not load users. Please refresh.')
+      })
+      .finally(() => {
+        if (requestId === latestRequest.current) setLoading(false)
+      })
   }
 
-  useEffect(loadUsers, [])
+  useEffect(loadUsers, [search, page])
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   // The console needs the college list (for the picker + a College column).
   useEffect(() => {
@@ -132,25 +168,14 @@ export default function People() {
     }
   }
 
-  const filtered = useMemo(
-    () =>
-      users.filter(
-        (u) =>
-          !search ||
-          u.full_name.toLowerCase().includes(search.toLowerCase()) ||
-          u.email.toLowerCase().includes(search.toLowerCase())
-      ),
-    [users, search]
-  )
-
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search by name or email..."
             className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
           />
@@ -183,12 +208,12 @@ export default function People() {
               <tr>
                 <td colSpan={COL_COUNT} className="text-center py-10 text-gray-400">Loading...</td>
               </tr>
-            ) : filtered.length === 0 ? (
+            ) : users.length === 0 ? (
               <tr>
                 <td colSpan={COL_COUNT} className="text-center py-10 text-gray-400">No users found</td>
               </tr>
             ) : (
-              filtered.map((u) => (
+              users.map((u) => (
                 <tr key={u.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-900">{u.full_name}</td>
                   <td className="px-4 py-3 text-gray-600">{u.email}</td>
@@ -259,6 +284,33 @@ export default function People() {
           </tbody>
         </table>
       </div>
+
+      {!loading && total > 0 && (
+        <div className="flex items-center justify-between text-sm text-gray-600">
+          <span>
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min((page - 1) * PAGE_SIZE + users.length, total)} of {total}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="flex items-center gap-1 border border-gray-300 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              Prev
+            </button>
+            <span className="text-gray-500">Page {page} of {totalPages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="flex items-center gap-1 border border-gray-300 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {reissued && (
         <InviteModal

@@ -98,6 +98,10 @@ export const STATUS_COLORS: Record<string, string> = {
   awaited: 'bg-yellow-100 text-yellow-700',
   received: 'bg-green-100 text-green-700',
   no_response: 'bg-red-100 text-red-700',
+  // Offer lifecycle (accepted + rejected are shared with the states above)
+  issued: 'bg-gray-100 text-gray-700',
+  joined: 'bg-green-100 text-green-700',
+  dropout: 'bg-red-100 text-red-700',
   // Training progress
   enrolled: 'bg-gray-100 text-gray-700',
   in_progress: 'bg-blue-100 text-blue-700',

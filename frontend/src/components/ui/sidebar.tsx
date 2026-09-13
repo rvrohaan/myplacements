@@ -8,6 +8,8 @@ import {
   Building2,
   Contact,
   CalendarDays,
+  FileSignature,
+  FileText,
   ChevronsUpDown,
   GraduationCap,
   LayoutDashboard,
@@ -90,6 +92,7 @@ const navItems = [
   { to: "/hr-contacts", icon: Contact, label: "HR Contacts" },
   { to: "/students", icon: GraduationCap, label: "Students" },
   { to: "/drives", icon: CalendarDays, label: "Drives" },
+  { to: "/offers", icon: FileSignature, label: "Offers" },
   { to: "/officers", icon: UserCog, label: "Officers" },
   { to: "/communications", icon: MessagesSquare, label: "Communications" },
   // filerOnly: the people who owe a daily update. leadershipOnly: who reads them.
@@ -98,6 +101,7 @@ const navItems = [
   { to: "/opportunities", icon: Radar, label: "Opportunities" },
   { to: "/training", icon: BookOpen, label: "Training" },
   { to: "/analytics", icon: BarChart3, label: "Analytics" },
+  { to: "/reports", icon: FileText, label: "Reports", adminOnly: true },
   { to: "/people", icon: Users, label: "People", adminOnly: true },
   // Platform-wide switches: the console, and only for the platform owner.
   { to: "/platform", icon: SlidersHorizontal, label: "Platform", consoleOnly: true, superAdminOnly: true },

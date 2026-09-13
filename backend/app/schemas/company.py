@@ -252,3 +252,39 @@ class CompanyOut(CompanyBase):
 
     class Config:
         from_attributes = True
+
+
+class MatchRequest(BaseModel):
+    """Parameters for a student shortlist. Everything is optional: with nothing
+    set, the company's own criteria apply to every batch on file."""
+
+    role_id: Optional[int] = None
+    batch_year: Optional[int] = None
+    limit: int = 25
+    #: Students already placed are left out by default. Colleges that allow a
+    #: second, better offer turn this on.
+    include_placed: bool = False
+    #: Ask the model to weight the skills. Off by default: it costs a call, and
+    #: the shortlist works without it.
+    use_ai: bool = False
+
+
+class MatchResponse(BaseModel):
+    company_id: int
+    company_name: str
+    role_id: Optional[int] = None
+    role_title: Optional[str] = None
+    criteria: dict
+    considered: int
+    eligible: int
+    excluded: list[dict]
+    weights: dict
+    skills_used: list[dict]
+    shortlist: list[dict]
+    training_gaps: list[dict]
+    past_pattern: dict
+    #: Present only when the skill weighting came from the model, so the UI can
+    #: say so rather than passing it off as a rule.
+    ai_summary: Optional[str] = None
+    ai_skills: Optional[list[dict]] = None
+    ai_error: Optional[str] = None

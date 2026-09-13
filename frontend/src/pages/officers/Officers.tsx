@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Plus, UserPlus, Target, Briefcase, MapPin, Pencil, Trash2, ArrowUpCircle, CheckCircle2 } from 'lucide-react'
 import api from '@/lib/api'
-import fetchAll from '@/lib/fetchAll'
 import { useAuthStore } from '@/store/authStore'
-import type { Officer, Assignment, AssignmentStatus, Company, UserRole } from '@/types'
+import type { Officer, Assignment, AssignmentStatus, UserRole } from '@/types'
 import { cn, STATUS_COLORS } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm'
 import { useToast } from '@/components/ui/toast'
 import { Field, inputClass, useFieldErrors } from '@/components/ui/field'
+import SearchSelect, { type SearchOption } from '@/components/ui/search-select'
+import { excluding, searchCompanies } from '@/lib/pickers'
 import { numberBetween, required, type Rules } from '@/lib/validation'
 import EditOfficerModal from './EditOfficerModal'
 
@@ -329,9 +330,8 @@ function AddOfficerForm({ onClose, onSaved }: { onClose: () => void; onSaved: ()
 
 function AssignmentPanel({ officer, canManage, onChanged, onClose }: { officer: Officer; canManage: boolean; onChanged: () => void; onClose: () => void }) {
   const [assignments, setAssignments] = useState<Assignment[]>([])
-  const [companies, setCompanies] = useState<Company[]>([])
   const [loading, setLoading] = useState(true)
-  const [companyId, setCompanyId] = useState('')
+  const [company, setCompany] = useState<SearchOption | null>(null)
   const [priority, setPriority] = useState('normal')
   const [assigning, setAssigning] = useState(false)
   const confirm = useConfirm()
@@ -344,23 +344,23 @@ function AssignmentPanel({ officer, canManage, onChanged, onClose }: { officer: 
 
   useEffect(() => {
     fetchAssignments()
-    // Only unassigned companies are pickable — a company has a single owner, so
-    // companies already allocated to another officer must not appear here.
-    fetchAll<Company>('/companies', { unassigned: true }).then(setCompanies).catch(() => {})
   }, [officer.id])
 
-  // Backend already excludes globally-assigned companies; this also drops any
-  // just assigned in this panel before the unassigned list is refetched.
+  // Only unassigned companies are pickable — a company has a single owner, so
+  // companies already allocated to another officer must not appear. The backend
+  // excludes those; `excluding` also drops any just assigned in this panel,
+  // which the server can't know about until the next search.
   const assigned = new Set(assignments.map((a) => a.company_id))
-  const available = companies.filter((c) => !assigned.has(c.id))
+  const findCompanies = (query: string) =>
+    searchCompanies(query, { unassigned: true }).then(excluding(assigned))
 
   const assign = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!companyId) return
+    if (!company) return
     setAssigning(true)
     try {
-      await api.post(`/officers/${officer.id}/assignments`, { company_id: parseInt(companyId), priority })
-      setCompanyId('')
+      await api.post(`/officers/${officer.id}/assignments`, { company_id: company.id, priority })
+      setCompany(null)
       toast.success('Company allocated')
       fetchAssignments()
       onChanged()
@@ -417,12 +417,15 @@ function AssignmentPanel({ officer, canManage, onChanged, onClose }: { officer: 
 
       {canManage && (
         <form onSubmit={assign} className="flex flex-wrap items-end gap-2">
-          <div className="flex-1 min-w-[200px]">
+          <div className="flex-1 min-w-[240px]">
             <label className="block text-xs font-medium text-gray-600 mb-1">Assign a company</label>
-            <select value={companyId} onChange={(e) => setCompanyId(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
-              <option value="" disabled>Select a company…</option>
-              {available.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <SearchSelect
+              value={company}
+              onChange={setCompany}
+              search={findCompanies}
+              placeholder="Search unassigned companies…"
+              emptyText="No unassigned company matches that"
+            />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Priority</label>
@@ -432,7 +435,7 @@ function AssignmentPanel({ officer, canManage, onChanged, onClose }: { officer: 
               <option value="high">High</option>
             </select>
           </div>
-          <button type="submit" disabled={!companyId || assigning} className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors">
+          <button type="submit" disabled={!company || assigning} className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 shadow-sm shadow-primary-600/25 transition-colors">
             <Plus className="w-4 h-4" /> Assign
           </button>
         </form>

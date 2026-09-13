@@ -66,6 +66,9 @@ class DriveRoundUpdate(BaseModel):
 
 
 class DriveOut(DriveBase):
+    # Resolved through the relationship, so a list of drives can be labelled
+    # without the caller fetching every company to match ids against.
+    company_name: Optional[str] = None
     id: int
     participant_count: int = 0
     rounds: list[DriveRoundOut] = []

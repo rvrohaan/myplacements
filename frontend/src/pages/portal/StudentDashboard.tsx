@@ -6,6 +6,7 @@ import type { Student } from '@/types'
 import { cn, STATUS_COLORS } from '@/lib/utils'
 import { useDriveAlerts } from '@/store/driveAlerts'
 import ResumeCard from './ResumeCard'
+import MySkillsCard from './MySkillsCard'
 
 const QUICK_LINKS = [
   { to: '/portal/practice', label: 'Practice interview & exam', icon: MessageSquare, desc: 'AI mock interviews and screening MCQs' },
@@ -100,18 +101,7 @@ export default function StudentDashboard() {
 
       <ResumeCard resumeUrl={student.resume_url} onUploaded={setStudent} />
 
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <h2 className="font-semibold text-gray-800 mb-3">My skills</h2>
-        {student.skills ? (
-          <div className="flex flex-wrap gap-2">
-            {student.skills.split(',').map((s) => s.trim()).filter(Boolean).map((s) => (
-              <span key={s} className="px-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium">{s}</span>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-gray-400">No skills listed yet. Ask your placement office to update your profile.</p>
-        )}
-      </div>
+      <MySkillsCard onSaved={setStudent} />
     </div>
   )
 }

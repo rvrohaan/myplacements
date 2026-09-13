@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { ArrowLeft, CalendarDays, MapPin, IndianRupee, Users, FileText, Pencil, CheckCircle, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import api from '@/lib/api'
-import fetchAll from '@/lib/fetchAll'
 import type { Drive, DriveRound, Participant, ParticipantStatus, Company } from '@/types'
 import { cn, STATUS_COLORS, formatDate, formatCTC } from '@/lib/utils'
 import OfferPackageModal from './OfferPackageModal'
@@ -34,7 +33,6 @@ export default function DriveDetail() {
   const [loading, setLoading] = useState(true)
   const [packageFor, setPackageFor] = useState<Participant | null>(null)
   const [editing, setEditing] = useState(false)
-  const [companies, setCompanies] = useState<Company[]>([])
   const [sortKey, setSortKey] = useState<SortKey>('roll')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
@@ -50,11 +48,6 @@ export default function DriveDetail() {
       })
       .finally(() => setLoading(false))
   }, [id])
-
-  // Companies list backs the (read-only) company field in the edit modal.
-  useEffect(() => {
-    fetchAll<Company>('/companies').then(setCompanies).catch(() => {})
-  }, [])
 
   const setRounds = (rounds: DriveRound[]) => setDrive((prev) => (prev ? { ...prev, rounds } : prev))
 
@@ -337,7 +330,6 @@ export default function DriveDetail() {
       {editing && (
         <DriveFormModal
           drive={drive}
-          companies={companies}
           onClose={() => setEditing(false)}
           onSaved={(updated) => {
             setDrive(updated)

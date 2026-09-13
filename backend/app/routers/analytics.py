@@ -1,5 +1,7 @@
+import statistics
 from collections import defaultdict
 from datetime import datetime, timedelta
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case, func, or_
@@ -7,12 +9,14 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_roles
+from app.core.timeutil import overdue_before
 from app.models.communication import Communication
 from app.models.company import Company, CompanyStatus
-from app.models.drive import Drive, DriveParticipant, DriveStatus, ParticipantStatus
+from app.models.drive import Drive, DriveParticipant, DriveRound, DriveStatus, ParticipantStatus
 from app.models.offer import Offer, OfferStatus
 from app.models.officer import CompanyAssignment, PlacementOfficer
-from app.models.student import PlacementStatus, Student
+from app.models.student import PlacementStatus, RiskCategory, Student
+from app.models.training import StudentTraining
 from app.models.user import User, UserRole
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -360,7 +364,9 @@ def get_my_work(db: Session = Depends(get_db), current_user: User = Depends(get_
         for c in my_comms
         if c.next_followup_date and (c.response_received or "") != "received"
     ]
-    overdue = [c for c in open_followups if c.next_followup_date < now]
+    # Late means the follow-up's *day* has passed — see timeutil.overdue_before.
+    late_before = overdue_before()
+    overdue = [c for c in open_followups if c.next_followup_date < late_before]
 
     student_ids = _officer_student_ids(db, drive_ids)
     placed_count = (
@@ -454,7 +460,7 @@ def get_my_work(db: Session = Depends(get_db), current_user: User = Depends(get_
                 "subject": c.subject,
                 "comm_type": c.comm_type.value if c.comm_type else None,
                 "next_followup_date": c.next_followup_date.isoformat(),
-                "overdue": c.next_followup_date < now,
+                "overdue": c.next_followup_date < late_before,
             }
             for c in sorted(open_followups, key=lambda x: x.next_followup_date)[:8]
         ],
@@ -488,6 +494,23 @@ def _recent_months(count: int = 6) -> list[dict]:
         # Step back a month by landing on the last day of the previous one.
         cursor = (cursor - timedelta(days=1)).replace(day=1)
     return list(reversed(months))
+
+
+@router.get("/officer-workload")
+def get_officer_workload(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*LEADERSHIP_ROLES)),
+):
+    """Is the work spread fairly across the team? Leadership only.
+
+    Separate from officer-performance, which ranks by what officers have landed.
+    This measures what they are currently carrying, because an officer holding
+    twice the companies and landing fewer offers is not underperforming - and a
+    table sorted by offers won says exactly that.
+    """
+    from app.services import workload
+
+    return workload.compute(db, current_user)
 
 
 @router.get("/officer-performance")
@@ -720,3 +743,749 @@ def get_officer_performance(
         },
         "trend": trend,
     }
+
+
+# --- Offer analytics --------------------------------------------------------
+#
+# The overview's CTC figures read `Student.placement_ctc`: one number per
+# student, their best live offer. These read the offer rows themselves, so a
+# student holding three offers counts three times. The two therefore report
+# different medians *by design* — "what packages did our students get" is a
+# question about students, "what are companies offering" is a question about
+# offers — and both screens say which they are showing.
+
+
+def _visible_offers(db: Session, user: User):
+    """Offers this user may see, joined to the student they belong to.
+
+    Scoped the same way routers/offers.py scopes its list: by company for an
+    officer, not by drive. (The officer *dashboard* above still counts offers
+    through drives, so an off-campus offer an officer recorded won't appear
+    there — worth reconciling, but changing it would move numbers people are
+    already reading, so it isn't done here.)
+    """
+    q = db.query(Offer).join(Student, Offer.student_id == Student.id)
+    if user.college_id:
+        q = q.filter(Student.college_id == user.college_id)
+    if _is_officer_scope(user):
+        officer = _officer_profile(db, user)
+        company_ids = _assigned_company_ids(db, officer)
+        if not company_ids:
+            return None
+        q = q.filter(Offer.company_id.in_(company_ids))
+    return q
+
+
+def _median(values: list[float]) -> Optional[float]:
+    return round(statistics.median(values), 2) if values else None
+
+
+def _rate(part: int, whole: int) -> Optional[float]:
+    return round(part * 100 / whole, 1) if whole else None
+
+
+def _live(status) -> bool:
+    return status in WON_OFFER_STATUSES
+
+
+@router.get("/offers")
+def get_offer_analytics(
+    batch_year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Offers cut by branch, company and role, plus how many were taken up.
+
+    Packages are read off **live** offers only (accepted or joined): a rejected
+    offer's CTC was never this college's number, and letting it into the median
+    would flatter or depress it depending on who turned what down.
+    """
+    scope = "officer" if _is_officer_scope(current_user) else "college"
+    empty = {
+        "scope": scope,
+        "batch_year": batch_year,
+        "headline": {
+            "offers": 0, "students_with_offer": 0, "students_with_multiple": 0,
+            "median_ctc": None, "highest_ctc": None, "avg_ctc": None,
+            "joining_conversion": None, "dropout_rate": None, "awaiting_joining_date": 0,
+        },
+        "funnel": [], "lost": {"rejected": 0, "dropout": 0},
+        "by_branch": [], "by_company": [], "by_role": [], "offers_per_student": [],
+    }
+
+    q = _visible_offers(db, current_user)
+    if q is None:
+        return empty
+    if batch_year:
+        q = q.filter(Student.batch_year == batch_year)
+
+    rows = q.with_entities(
+        Offer.id, Offer.status, Offer.ctc, Offer.student_id, Offer.joining_date,
+        Offer.role, Offer.company_id, Student.branch,
+    ).all()
+    if not rows:
+        return empty
+
+    company_names = dict(
+        db.query(Company.id, Company.name)
+        .filter(Company.id.in_({r.company_id for r in rows if r.company_id}))
+        .all()
+    ) if any(r.company_id for r in rows) else {}
+
+    by_status: dict = defaultdict(int)
+    per_student: dict = defaultdict(int)
+    live_packages: list[float] = []
+    awaiting = 0
+    branches: dict = defaultdict(lambda: {"offers": 0, "students": set(), "joined": 0, "packages": []})
+    companies: dict = defaultdict(lambda: {"offers": 0, "students": set(), "packages": []})
+    roles: dict = defaultdict(lambda: {"offers": 0, "packages": []})
+
+    for r in rows:
+        by_status[r.status] += 1
+        per_student[r.student_id] += 1
+        live = _live(r.status)
+        if live:
+            if r.ctc is not None:
+                live_packages.append(r.ctc)
+            if r.joining_date is None:
+                awaiting += 1
+
+        branch = (r.branch or "Unrecorded").strip() or "Unrecorded"
+        b = branches[branch]
+        b["offers"] += 1
+        b["students"].add(r.student_id)
+        if r.status == OfferStatus.JOINED:
+            b["joined"] += 1
+        if live and r.ctc is not None:
+            b["packages"].append(r.ctc)
+
+        # An offer with no company is the "mark as placed" placeholder — it has
+        # no company to attribute to, so it sits out the company breakdown
+        # rather than being lumped under a made-up label.
+        if r.company_id:
+            c = companies[r.company_id]
+            c["offers"] += 1
+            c["students"].add(r.student_id)
+            if live and r.ctc is not None:
+                c["packages"].append(r.ctc)
+
+        role = (r.role or "").strip()
+        if role:
+            ro = roles[role.lower()]
+            ro["offers"] += 1
+            ro.setdefault("label", role)
+            if live and r.ctc is not None:
+                ro["packages"].append(r.ctc)
+
+    total = len(rows)
+    accepted = by_status[OfferStatus.ACCEPTED]
+    joined = by_status[OfferStatus.JOINED]
+    dropout = by_status[OfferStatus.DROPOUT]
+    taken_up = accepted + joined
+
+    counts_per_student: dict = defaultdict(int)
+    for n in per_student.values():
+        counts_per_student[min(n, 3)] += 1
+
+    return {
+        "scope": scope,
+        "batch_year": batch_year,
+        "headline": {
+            "offers": total,
+            "students_with_offer": len(per_student),
+            "students_with_multiple": sum(1 for n in per_student.values() if n > 1),
+            "median_ctc": _median(live_packages),
+            "highest_ctc": round(max(live_packages), 2) if live_packages else None,
+            "avg_ctc": round(sum(live_packages) / len(live_packages), 2) if live_packages else None,
+            # Of the offers students said yes to, the share that reached joining.
+            "joining_conversion": _rate(joined, taken_up),
+            # Of those same offers, the share that fell through afterwards.
+            "dropout_rate": _rate(dropout, taken_up + dropout),
+            "awaiting_joining_date": awaiting,
+        },
+        # Each stage is a subset of the one above it, so this reads as a funnel
+        # rather than three statuses that happen to be drawn side by side.
+        "funnel": [
+            {"stage": "Offers made", "count": total},
+            {"stage": "Taken up", "count": taken_up},
+            {"stage": "Joined", "count": joined},
+        ],
+        "lost": {"rejected": by_status[OfferStatus.REJECTED], "dropout": dropout},
+        "by_branch": sorted(
+            (
+                {
+                    "branch": name,
+                    "offers": v["offers"],
+                    "students": len(v["students"]),
+                    "joined": v["joined"],
+                    "median_ctc": _median(v["packages"]),
+                    "highest_ctc": round(max(v["packages"]), 2) if v["packages"] else None,
+                }
+                for name, v in branches.items()
+            ),
+            key=lambda d: -d["offers"],
+        ),
+        "by_company": sorted(
+            (
+                {
+                    "company": company_names.get(cid, f"Company #{cid}"),
+                    "offers": v["offers"],
+                    "students": len(v["students"]),
+                    "median_ctc": _median(v["packages"]),
+                    "highest_ctc": round(max(v["packages"]), 2) if v["packages"] else None,
+                }
+                for cid, v in companies.items()
+            ),
+            key=lambda d: (-d["offers"], d["company"].lower()),
+        )[:12],
+        "by_role": sorted(
+            (
+                {"role": v["label"], "offers": v["offers"], "median_ctc": _median(v["packages"])}
+                for v in roles.values()
+            ),
+            key=lambda d: (-d["offers"], d["role"].lower()),
+        )[:12],
+        "offers_per_student": [
+            {"offers": "3+" if n == 3 else str(n), "students": counts_per_student[n]}
+            for n in sorted(counts_per_student)
+        ],
+    }
+
+
+# --- Student analytics ------------------------------------------------------
+#
+# Deliberately *not* "placement rate by risk band": student_scoring.assess()
+# sets a placed student to readiness 100 and risk low, so that chart would
+# always read "100% of low-risk students get placed" — it would be measuring its
+# own definition. The bands below (CGPA, backlogs, training) are inputs the
+# score is derived from rather than outputs of it, so the rates mean something.
+# Risk is reported only as the mix among students still looking, which is the
+# actionable question anyway.
+
+# Placement statuses that mean the student is still looking.
+SEEKING = (PlacementStatus.UNPLACED,)
+
+CGPA_BANDS = [("9+", 9.0, None), ("8–9", 8.0, 9.0), ("7–8", 7.0, 8.0), ("6–7", 6.0, 7.0), ("Below 6", None, 6.0)]
+
+
+def _cgpa_band(cgpa: Optional[float]) -> str:
+    if cgpa is None:
+        return "Not recorded"
+    for label, lo, hi in CGPA_BANDS:
+        if (lo is None or cgpa >= lo) and (hi is None or cgpa < hi):
+            return label
+    return "Not recorded"
+
+
+def _empty_student_analytics(scope: str, batch_year: Optional[int]) -> dict:
+    """The same shape as a populated response, so a caller never has to branch on
+    whether any students came back."""
+    return {
+        "scope": scope,
+        "batch_year": batch_year,
+        "headline": {
+            "students": 0, "placed": 0, "placement_rate": None,
+            "seeking": 0, "avg_readiness_of_seeking": None,
+        },
+        "risk_of_seeking": [],
+        "cgpa_bands": [],
+        "backlogs": [],
+        "training": None,
+        "skills": {"placed": [], "seeking": [], "gaps": []},
+    }
+
+
+@router.get("/students")
+def get_student_analytics(
+    batch_year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Who is placed, against the things that might explain it: marks, backlogs,
+    training and skills. Correlation only — these are the numbers that would tell
+    you whether a predictive model is worth building, not the model itself."""
+    scope = "officer" if _is_officer_scope(current_user) else "college"
+    q = db.query(Student)
+    if current_user.college_id:
+        q = q.filter(Student.college_id == current_user.college_id)
+    if _is_officer_scope(current_user):
+        officer = _officer_profile(db, current_user)
+        drive_ids = _drive_ids_for_companies(db, _assigned_company_ids(db, officer))
+        student_ids = _officer_student_ids(db, drive_ids)
+        if not student_ids:
+            return _empty_student_analytics(scope, batch_year)
+        q = q.filter(Student.id.in_(student_ids))
+    if batch_year:
+        q = q.filter(Student.batch_year == batch_year)
+
+    students = q.with_entities(
+        Student.id, Student.cgpa, Student.backlogs, Student.skills,
+        Student.placement_status, Student.risk_category, Student.readiness_score,
+    ).all()
+    if not students:
+        return _empty_student_analytics(scope, batch_year)
+
+    placed_ids = {s.id for s in students if s.placement_status == PlacementStatus.PLACED}
+    seeking = [s for s in students if s.placement_status in SEEKING]
+
+    def bucket(key_fn):
+        """Group students by a label and count how many of each group are placed."""
+        groups: dict = defaultdict(lambda: {"students": 0, "placed": 0})
+        for s in students:
+            g = groups[key_fn(s)]
+            g["students"] += 1
+            if s.id in placed_ids:
+                g["placed"] += 1
+        return groups
+
+    cgpa_groups = bucket(lambda s: _cgpa_band(s.cgpa))
+    order = [b[0] for b in CGPA_BANDS] + ["Not recorded"]
+    cgpa_bands = [
+        {"band": b, "students": cgpa_groups[b]["students"], "placed": cgpa_groups[b]["placed"],
+         "placement_rate": _rate(cgpa_groups[b]["placed"], cgpa_groups[b]["students"])}
+        for b in order if b in cgpa_groups
+    ]
+
+    backlog_groups = bucket(lambda s: "No backlogs" if not (s.backlogs or 0) else
+                            ("1–2 backlogs" if (s.backlogs or 0) <= 2 else "3+ backlogs"))
+    backlogs = [
+        {"band": b, "students": v["students"], "placed": v["placed"],
+         "placement_rate": _rate(v["placed"], v["students"])}
+        for b, v in sorted(backlog_groups.items(), key=lambda kv: ["No backlogs", "1–2 backlogs", "3+ backlogs"].index(kv[0]))
+    ]
+
+    risk_counts: dict = defaultdict(int)
+    for s in seeking:
+        risk_counts[s.risk_category or RiskCategory.MEDIUM] += 1
+    risk_of_seeking = [
+        {"band": band.value, "students": risk_counts.get(band, 0)}
+        for band in (RiskCategory.HIGH, RiskCategory.MEDIUM, RiskCategory.LOW)
+    ]
+    readiness = [s.readiness_score for s in seeking if s.readiness_score is not None]
+
+    # --- training -----------------------------------------------------------
+    student_ids = [s.id for s in students]
+    records = (
+        db.query(
+            StudentTraining.student_id, StudentTraining.score,
+            StudentTraining.attendance_percent, StudentTraining.mock_test_score,
+            StudentTraining.status,
+        )
+        .filter(StudentTraining.student_id.in_(student_ids))
+        .all()
+    ) if student_ids else []
+
+    training = None
+    if records:
+        trained_ids = {r.student_id for r in records}
+        attendance = [r.attendance_percent for r in records if r.attendance_percent is not None]
+        scores = [r.score for r in records if r.score is not None]
+        mocks = [r.mock_test_score for r in records if r.mock_test_score is not None]
+        untrained = [s for s in students if s.id not in trained_ids]
+        training = {
+            "enrolments": len(records),
+            "students_trained": len(trained_ids),
+            "completed": sum(1 for r in records if r.status == "completed"),
+            "avg_attendance": round(sum(attendance) / len(attendance), 1) if attendance else None,
+            "avg_score": round(sum(scores) / len(scores), 1) if scores else None,
+            "avg_mock_score": round(sum(mocks) / len(mocks), 1) if mocks else None,
+            # Correlation, not proof: the students who turn up for training are
+            # rarely a random sample of the year.
+            "placement_rate_trained": _rate(len(trained_ids & placed_ids), len(trained_ids)),
+            "placement_rate_untrained": _rate(
+                sum(1 for s in untrained if s.id in placed_ids), len(untrained)
+            ),
+        }
+
+    # --- skills -------------------------------------------------------------
+    # Free text, so the same skill arrives as "Python", "python " and "PYTHON".
+    # Counted per student, not per mention: listing React twice isn't two people.
+    def skill_counts(group) -> dict:
+        counts: dict = defaultdict(int)
+        for s in group:
+            if not s.skills:
+                continue
+            seen = {part.strip().lower() for part in s.skills.split(",") if part.strip()}
+            for skill in seen:
+                counts[skill] += 1
+        return counts
+
+    placed_students = [s for s in students if s.id in placed_ids]
+    placed_skills = skill_counts(placed_students)
+    seeking_skills = skill_counts(seeking)
+
+    def top(counts: dict, group_size: int, limit: int = 10):
+        return [
+            {"skill": k, "students": v, "share": _rate(v, group_size)}
+            for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+        ]
+
+    # The gap: skills common among placed students that the ones still looking
+    # don't have. Restricted to skills at least a fifth of placed students list,
+    # so a single placed student's niche tool doesn't read as a training need.
+    gaps = []
+    if placed_students:
+        floor = max(1, len(placed_students) // 5)
+        for skill, count in placed_skills.items():
+            if count < floor:
+                continue
+            placed_share = _rate(count, len(placed_students)) or 0
+            seeking_share = _rate(seeking_skills.get(skill, 0), len(seeking)) or 0
+            if placed_share > seeking_share:
+                gaps.append({
+                    "skill": skill,
+                    "placed_share": placed_share,
+                    "seeking_share": seeking_share,
+                    "gap": round(placed_share - seeking_share, 1),
+                })
+        gaps.sort(key=lambda d: -d["gap"])
+
+    return {
+        "scope": scope,
+        "batch_year": batch_year,
+        "headline": {
+            "students": len(students),
+            "placed": len(placed_ids),
+            "placement_rate": _rate(len(placed_ids), len(students)),
+            "seeking": len(seeking),
+            # Placed students are scored 100 by definition, so an average over
+            # everyone would just track the placement rate. This is the average
+            # for the students the number is actually about.
+            "avg_readiness_of_seeking": round(sum(readiness) / len(readiness), 1) if readiness else None,
+        },
+        "risk_of_seeking": risk_of_seeking,
+        "cgpa_bands": cgpa_bands,
+        "backlogs": backlogs,
+        "training": training,
+        "skills": {
+            "placed": top(placed_skills, len(placed_students)),
+            "seeking": top(seeking_skills, len(seeking)),
+            "gaps": gaps[:10],
+        },
+    }
+
+
+@router.get("/batch-years")
+def get_batch_years(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Batch years on file, newest first — the filter both screens above share."""
+    q = db.query(Student.batch_year).distinct()
+    if current_user.college_id:
+        q = q.filter(Student.college_id == current_user.college_id)
+    return sorted({r[0] for r in q.all() if r[0]}, reverse=True)
+
+
+# --- Company analytics -------------------------------------------------------
+#
+# The arithmetic lives in services/company_metrics.py because the Company
+# Conversion report answers the same question in another shape. One definition
+# of "contacted", two presentations.
+
+
+@router.get("/companies")
+def get_company_analytics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*LEADERSHIP_ROLES)),
+):
+    """Where the company pipeline actually is: the mix on file, how far each
+    stage converts, whether outreach gets answered, and who has gone quiet."""
+    from app.services.company_metrics import (
+        company_rows, engagement_by_company, funnel, status_mix,
+    )
+
+    rows = company_rows(db, current_user)
+    if not rows:
+        return {
+            "companies": 0, "status_mix": [], "funnel": [], "reply_rate": None,
+            "logged": 0, "replied": 0, "stale": 0, "never_contacted": 0,
+            "unassigned": 0, "without_contacts": 0, "top_companies": [],
+            "going_quiet": [], "engagement": [],
+        }
+
+    logged = sum(r.logged for r in rows)
+    replied = sum(r.replied for r in rows)
+    engagement = engagement_by_company(db, current_user)
+
+    # Companies worth chasing that nobody has spoken to lately. Blacklisted and
+    # dormant ones are left out: they are quiet on purpose.
+    workable = [r for r in rows if r.status not in ("blacklisted", "dormant")]
+    going_quiet = sorted(
+        (r for r in workable if r.stale and r.offers == 0),
+        key=lambda r: (r.days_since_contact is None, -(r.days_since_contact or 0)),
+    )[:10]
+
+    top = sorted(rows, key=lambda r: (-len(r.placed), -r.offers, r.name.lower()))[:10]
+
+    return {
+        "companies": len(rows),
+        "status_mix": [{"status": s, "companies": n} for s, n in status_mix(rows)],
+        "funnel": [{"stage": stage, "companies": n} for stage, n in funnel(rows)],
+        "logged": logged,
+        "replied": replied,
+        # Of all outreach logged, the share marked answered. Unlike the per-channel
+        # rate on the HR tab this keeps awaited entries in the denominator, because
+        # here the question is "how much of what we sent came back", not "how good
+        # is this channel".
+        "reply_rate": round(replied * 100 / logged, 1) if logged else None,
+        "stale": sum(1 for r in workable if r.stale),
+        "never_contacted": sum(1 for r in workable if not r.logged),
+        "unassigned": sum(1 for r in rows if r.owner == "Unassigned"),
+        "without_contacts": sum(1 for r in rows if not r.contacts),
+        "top_companies": [
+            {
+                "company": r.name, "status": r.status, "owner": r.owner,
+                "logged": r.logged, "reply_rate": r.reply_rate, "drives": r.drives,
+                "offers": r.offers, "students_placed": len(r.placed),
+                "engagement": (engagement.get(r.id) or {}).get("score"),
+            }
+            for r in top
+        ],
+        "going_quiet": [
+            {
+                "company": r.name, "status": r.status, "owner": r.owner,
+                "days_since_contact": r.days_since_contact, "logged": r.logged,
+            }
+            for r in going_quiet
+        ],
+        "engagement": [
+            {"company": r.name, "score": engagement[r.id]["score"],
+             "contacts_scored": engagement[r.id]["contacts_scored"]}
+            for r in sorted(rows, key=lambda r: -(engagement.get(r.id, {}).get("score", -1)))
+            if r.id in engagement
+        ][:10],
+    }
+
+
+# --- HR analytics ------------------------------------------------------------
+
+
+@router.get("/hr")
+def get_hr_analytics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*LEADERSHIP_ROLES)),
+):
+    """Whether outreach is landing: which channels get answered, how the
+    relationships are banded, and what is overdue."""
+    from app.services.hr_metrics import (
+        channel_stats, contact_scores, engagement_mix, followup_buckets,
+    )
+
+    contacts, scores, company_of = contact_scores(db, current_user)
+    channels = channel_stats(db, current_user)
+    now = datetime.utcnow()
+    late_before = overdue_before()
+
+    # The escalation list: relationships that have gone cold or silent, worst
+    # first. Ordered by how long they have been ignored rather than by score, so
+    # it reads as a work queue.
+    alerts = []
+    for contact in contacts:
+        result = scores.get(contact.id)
+        overdue_days = (
+            (now - contact.next_followup_date).days
+            if contact.next_followup_date and contact.next_followup_date < late_before
+            else None
+        )
+        stale = result["stale"] if result else True
+        if overdue_days is None and not stale:
+            continue
+        alerts.append({
+            "contact": contact.name,
+            "company": company_of.get(contact.id, "—"),
+            "band": result["band"] if result else "no history",
+            "days_since_contact": result["days_since_contact"] if result else None,
+            "overdue_days": overdue_days,
+            "reason": (
+                "Follow-up overdue" if overdue_days is not None
+                else "Nothing logged yet" if not result
+                else "No contact in six months"
+            ),
+        })
+    alerts.sort(key=lambda a: (-(a["overdue_days"] or 0), -(a["days_since_contact"] or 0)))
+
+    replied = sum(c["replied"] for c in channels)
+    decided = sum(c["replied"] + c["no_response"] for c in channels)
+    return {
+        "contacts": len(contacts),
+        "logged": sum(c["logged"] for c in channels),
+        "replied": replied,
+        "reply_rate": round(replied * 100 / decided, 1) if decided else None,
+        "awaiting": sum(c["awaiting"] for c in channels),
+        "channels": channels,
+        "engagement": engagement_mix(scores, len(contacts)),
+        "followups": followup_buckets(contacts, now),
+        "alerts": alerts[:12],
+        "alert_total": len(alerts),
+    }
+
+
+# --- Drive analytics ---------------------------------------------------------
+
+
+@router.get("/drives")
+def get_drive_analytics(
+    batch_year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*LEADERSHIP_ROLES)),
+):
+    """How drives convert: participants through the rounds, and what came out.
+
+    Round figures are the counts officers entered on each round, not a
+    recomputation from participant statuses — the two can legitimately differ
+    (a student who cleared a round then withdrew), and silently reconciling them
+    would hide that rather than show it.
+    """
+    cid = current_user.college_id
+    drives_q = db.query(Drive)
+    if cid:
+        drives_q = drives_q.filter(Drive.college_id == cid)
+    drives = drives_q.all()
+    drive_ids = [d.id for d in drives]
+    if not drive_ids:
+        return {
+            "drives": 0, "by_status": [], "participants": 0, "funnel": [],
+            "rounds": [], "conversion": {}, "by_drive": [],
+        }
+
+    participants = (
+        db.query(DriveParticipant.drive_id, DriveParticipant.status,
+                 DriveParticipant.student_id)
+        .filter(DriveParticipant.drive_id.in_(drive_ids))
+        .all()
+    )
+    if batch_year:
+        student_batch = dict(
+            db.query(Student.id, Student.batch_year)
+            .filter(Student.id.in_({p.student_id for p in participants}))
+            .all()
+        )
+        participants = [p for p in participants if student_batch.get(p.student_id) == batch_year]
+
+    status_counts: dict = defaultdict(int)
+    per_drive: dict[int, dict] = defaultdict(lambda: {"participants": 0, "selected": 0, "rejected": 0})
+    for p in participants:
+        status_counts[p.status] += 1
+        row = per_drive[p.drive_id]
+        row["participants"] += 1
+        if p.status == ParticipantStatus.SELECTED:
+            row["selected"] += 1
+        elif p.status == ParticipantStatus.REJECTED:
+            row["rejected"] += 1
+
+    total_participants = len(participants)
+    selected = status_counts[ParticipantStatus.SELECTED]
+    rejected = status_counts[ParticipantStatus.REJECTED]
+    withdrawn = status_counts[ParticipantStatus.WITHDRAWN]
+    # Everyone who got past registration — the drives' working set.
+    beyond_registration = total_participants - status_counts[ParticipantStatus.REGISTERED]
+
+    offers = (
+        db.query(Offer.drive_id, Offer.status, Offer.student_id)
+        .filter(Offer.drive_id.in_(drive_ids))
+        .all()
+    )
+    offer_count = len(offers)
+    won = sum(1 for o in offers if o.status in WON_OFFER_STATUSES)
+    for o in offers:
+        per_drive[o.drive_id]["offers"] = per_drive[o.drive_id].get("offers", 0) + 1
+
+    rounds = (
+        db.query(DriveRound.round_number, DriveRound.name,
+                 DriveRound.appeared_count, DriveRound.passed_count)
+        .filter(DriveRound.drive_id.in_(drive_ids))
+        .all()
+    )
+    by_round: dict[int, dict] = defaultdict(lambda: {"appeared": 0, "passed": 0, "rounds": 0, "names": set()})
+    for number, name, appeared, passed in rounds:
+        if appeared is None and passed is None:
+            continue  # nothing recorded for this round yet
+        bucket = by_round[number]
+        bucket["rounds"] += 1
+        bucket["appeared"] += appeared or 0
+        bucket["passed"] += passed or 0
+        if name:
+            bucket["names"].add(name)
+
+    round_rows = []
+    for number in sorted(by_round):
+        b = by_round[number]
+        appeared, passed = b["appeared"], b["passed"]
+        round_rows.append({
+            "round": number,
+            # The most common label officers gave this round, when they gave one.
+            "name": sorted(b["names"])[0] if b["names"] else f"Round {number}",
+            "drives": b["rounds"],
+            "appeared": appeared,
+            "passed": passed,
+            "dropped": max(0, appeared - passed),
+            "pass_rate": round(passed * 100 / appeared, 1) if appeared else None,
+        })
+
+    company_names = dict(
+        db.query(Company.id, Company.name).filter(
+            Company.id.in_({d.company_id for d in drives})
+        ).all()
+    )
+    by_drive = sorted(
+        (
+            {
+                "drive": f"{company_names.get(d.company_id, 'Company')} — {d.job_role}",
+                "status": d.status.value if d.status else "—",
+                "participants": per_drive[d.id]["participants"],
+                "selected": per_drive[d.id]["selected"],
+                "offers": per_drive[d.id].get("offers", 0),
+                "selection_rate": (
+                    round(per_drive[d.id]["selected"] * 100 / per_drive[d.id]["participants"], 1)
+                    if per_drive[d.id]["participants"] else None
+                ),
+            }
+            for d in drives
+        ),
+        key=lambda r: (-r["selected"], -r["participants"]),
+    )[:12]
+
+    status_mix = defaultdict(int)
+    for d in drives:
+        status_mix[d.status.value if d.status else "—"] += 1
+
+    return {
+        "drives": len(drives),
+        "batch_year": batch_year,
+        "by_status": [{"status": s, "drives": n} for s, n in
+                      sorted(status_mix.items(), key=lambda kv: -kv[1])],
+        "participants": total_participants,
+        # Subsets, so this reads as a funnel.
+        "funnel": [
+            {"stage": "Registered", "count": total_participants},
+            {"stage": "Took part", "count": beyond_registration},
+            {"stage": "Selected", "count": selected},
+            {"stage": "Offer recorded", "count": offer_count},
+        ],
+        "lost": {"rejected": rejected, "withdrawn": withdrawn},
+        "rounds": round_rows,
+        "conversion": {
+            "selection_rate": round(selected * 100 / total_participants, 1) if total_participants else None,
+            "offers_per_selection": round(offer_count / selected, 2) if selected else None,
+            "offers_won": won,
+            "offer_conversion": round(won * 100 / offer_count, 1) if offer_count else None,
+        },
+        "by_drive": by_drive,
+    }
+
+
+@router.get("/risk-calibration")
+def get_risk_calibration(
+    batch_year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*LEADERSHIP_ROLES)),
+):
+    """Whether the risk score predicts anything, measured on a settled batch.
+
+    Scores every student on their *inputs* only — the stored risk band folds in
+    placement status, so validating that against placement would be circular —
+    and reports what actually happened to each band. Runs the current rule and a
+    richer candidate side by side, so a change to the scorer can be argued from
+    this college's own outcomes rather than asserted.
+    """
+    from app.services.risk import calibration
+
+    return calibration(db, current_user, batch_year)

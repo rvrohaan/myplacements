@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
@@ -131,6 +131,9 @@ def list_drives(
         q = q.filter(Drive.status == status)
     if company_id:
         q = q.filter(Drive.company_id == company_id)
+    # Every row names its company, so load them in one extra query rather than
+    # one per drive.
+    q = q.options(selectinload(Drive.company))
     return q.order_by(Drive.drive_date.desc()).offset(skip).limit(limit).all()
 
 
@@ -631,7 +634,12 @@ def _record_selection(db: Session, participant: DriveParticipant, student: Stude
         .first()
     )
     if offer is None:
-        offer = Offer(student_id=student.id, drive_id=participant.drive_id, role=drive.job_role if drive else None)
+        offer = Offer(
+            student_id=student.id,
+            drive_id=participant.drive_id,
+            company_id=drive.company_id if drive else None,
+            role=drive.job_role if drive else None,
+        )
         db.add(offer)
     if ctc is not None:
         offer.ctc = ctc
@@ -668,7 +676,10 @@ def create_offer(
     current_user: User = Depends(get_current_user),
 ):
     drive = _visible_drive(drive_id, db, current_user)
-    offer = Offer(**payload.model_dump(), drive_id=drive_id)
+    # The path decides the drive, and the drive decides the company; anything the
+    # body says about either is ignored rather than trusted.
+    data = payload.model_dump(exclude={"drive_id", "company_id"})
+    offer = Offer(**data, drive_id=drive_id, company_id=drive.company_id)
     db.add(offer)
     notify.drive_offer(db, drive=drive, actor=current_user)
     db.commit()

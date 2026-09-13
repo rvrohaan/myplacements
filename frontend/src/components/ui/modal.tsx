@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useId, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm-context'
@@ -144,10 +145,16 @@ export function Modal({
     }
   }, [])
 
-  return (
+  // Rendered into <body> rather than in place: a full-screen overlay left
+  // inside the page tree inherits whatever the surrounding layout applies to
+  // its children — a `space-y-*` parent, for instance, gives the backdrop a
+  // top margin, so it starts a few pixels down and leaves a strip of the page
+  // showing above it. A portal also keeps `fixed` anchored to the viewport if
+  // an ancestor ever gains a transform.
+  return createPortal(
     <div
       className={cn(
-        'fixed inset-0 z-50 flex justify-center bg-black/50 p-4',
+        'fixed inset-0 z-50 m-0 flex justify-center bg-black/50 p-4',
         align === 'center' ? 'items-center' : 'items-start overflow-y-auto',
       )}
       onClick={closeOnBackdrop ? () => void requestClose() : undefined}
@@ -170,7 +177,8 @@ export function Modal({
           {children}
         </Ctx.Provider>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

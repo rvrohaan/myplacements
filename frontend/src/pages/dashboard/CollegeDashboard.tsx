@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import InsightsPanel from './InsightsPanel'
 import { Building2, GraduationCap, CalendarDays, TrendingUp } from 'lucide-react'
 import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import api from '@/lib/api'
@@ -34,6 +35,8 @@ export default function CollegeDashboard() {
 
   return (
     <div className="space-y-6">
+      <InsightsPanel />
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon={GraduationCap}

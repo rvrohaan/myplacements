@@ -55,6 +55,13 @@ class StudentUpdate(BaseModel):
     higher_studies_plan: Optional[bool] = None
 
 
+class StudentFilterOptions(BaseModel):
+    """The distinct values behind the student list's branch and batch filters."""
+
+    branches: list[str]
+    batch_years: list[int]
+
+
 class StudentOut(StudentBase):
     id: int
     user_id: int
