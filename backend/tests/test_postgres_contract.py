@@ -64,3 +64,64 @@ def test_ilike_is_case_insensitive(pg_engine):
     it; this proves the real operator behaves as those endpoints assume."""
     with pg_engine.connect() as conn:
         assert conn.execute(text("SELECT 'RIT College' ILIKE '%rit%'")).scalar() is True
+
+
+def test_the_daily_scan_lock_actually_locks(pg_engine):
+    """The one invariant in the product that is billed if it breaks.
+
+    One national web scan a day is shared by every tenant. The lock is a
+    *partial* unique index - unique on scan_date only where triggered_by_id is
+    NULL - so the scheduler can claim a day once while a person can still press
+    "Scan now" alongside it. Partial indexes are Postgres-only and this one is
+    created by run_migrations rather than by the model, so nothing outside this
+    tier can test it: on SQLite an hourly cron would claim twenty-four times.
+    """
+    from datetime import date, datetime
+
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session
+
+    from app.models.job_lead import JobLeadScan
+
+    run_migrations(pg_engine)
+    day = date(2026, 9, 14)
+
+    with Session(pg_engine) as session:
+        session.query(JobLeadScan).filter(JobLeadScan.scan_date == day).delete()
+        session.commit()
+
+        session.add(JobLeadScan(scan_date=day, started_at=datetime.utcnow(), status="ok"))
+        session.commit()
+
+        # The scheduler's second attempt that day must be refused.
+        session.add(JobLeadScan(scan_date=day, started_at=datetime.utcnow(), status="ok"))
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+        # A person pressing "Scan now" is not the scheduler, so it still works.
+        # A real user row, because triggered_by_id carries a foreign key.
+        from app.models.user import User, UserRole
+
+        person = User(
+            email="scan-lock-probe@example.com",
+            full_name="Scan Lock Probe",
+            hashed_password="x",
+            role=UserRole.SUPER_ADMIN,
+        )
+        session.add(person)
+        session.commit()
+
+        session.add(
+            JobLeadScan(
+                scan_date=day,
+                started_at=datetime.utcnow(),
+                status="ok",
+                triggered_by_id=person.id,
+            )
+        )
+        session.commit()
+
+        session.query(JobLeadScan).filter(JobLeadScan.scan_date == day).delete()
+        session.delete(person)
+        session.commit()

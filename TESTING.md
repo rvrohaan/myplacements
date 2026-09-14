@@ -205,6 +205,29 @@ guards were lifted out of `App.tsx` into `src/routes/guards.tsx` so they can be
 tested without importing all 40 page modules; `ResetPasswordRoute` stayed
 behind, since it renders a page rather than gating one.
 
+### Coverage
+
+`app/core` + `app/services` sits at **74%**. Fully covered: `matching`,
+`skills`, `placement`, `workload`, `allocation`, `hr_engagement`, `security`,
+`roles`. High: `report_defs` 88%, `report_builder` 88%, `company_metrics` 98%,
+`excel_io` 98%, `followups` 99%, `timeutil` 93%, `hr_metrics` 84%.
+
+Deliberately partial: `notify` 66% (the twenty-odd event helpers are one-line
+wrappers over the tested `notify()`), `job_scan` 59% (`execute_scan` is the
+network boundary), `daily_metrics` and `monthly.gather` (reached indirectly
+through the report and digest tests).
+
+### Two things SQLite cannot tell you
+
+Both are in `tests/test_postgres_contract.py`, and both are flagged where the
+fast tier would otherwise look like it had covered them:
+
+* **The daily scan lock.** One national web scan a day is shared by every
+  tenant, and the lock is a *partial* unique index created by `run_migrations`
+  rather than by the model - so it exists only on Postgres, and only after
+  migrations have run. On SQLite an hourly cron would claim twenty-four times.
+* **Enum values and `ilike`**, as before.
+
 ## Conventions
 
 - `describe` names the unit; the `it` reads as a sentence about behaviour, not
