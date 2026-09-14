@@ -219,15 +219,16 @@ behind, since it renders a page rather than gating one.
 
 ### Coverage
 
-`app/core` + `app/services` sits at **74%**. Fully covered: `matching`,
+`app/core` + `app/services` sits at **78%**. Fully covered: `matching`,
 `skills`, `placement`, `workload`, `allocation`, `hr_engagement`, `security`,
 `roles`. High: `report_defs` 88%, `report_builder` 88%, `company_metrics` 98%,
 `excel_io` 98%, `followups` 99%, `timeutil` 93%, `hr_metrics` 84%.
 
+Also high: `monthly` 98%, `risk` 97%, `daily_metrics` 85%.
+
 Deliberately partial: `notify` 66% (the twenty-odd event helpers are one-line
 wrappers over the tested `notify()`), `job_scan` 59% (`execute_scan` is the
-network boundary), `daily_metrics` and `monthly.gather` (reached indirectly
-through the report and digest tests).
+network boundary), `ai_service` (every remaining line is a live model call).
 
 ### Two things SQLite cannot tell you
 
