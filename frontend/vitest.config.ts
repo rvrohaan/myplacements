@@ -25,6 +25,9 @@ export default defineConfig({
       jsdom: { url: 'http://rit.myplacements.in/' },
     },
     setupFiles: ['./src/test/setup.ts'],
+    // Playwright owns ./e2e. Its specs match vitest's default `*.spec.ts`
+    // pattern, and vitest would try to run them against jsdom with no browser.
+    exclude: ['node_modules/**', 'dist/**', 'e2e/**'],
     // No `globals`: describe/it/expect are imported explicitly, so test files
     // need no ambient type registration to typecheck.
     globals: false,

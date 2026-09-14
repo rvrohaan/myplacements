@@ -240,6 +240,46 @@ fast tier would otherwise look like it had covered them:
   migrations have run. On SQLite an hourly cron would claim twenty-four times.
 * **Enum values and `ilike`**, as before.
 
+## End to end
+
+```bash
+docker compose up db -d
+docker exec myplacements-db-1 psql -U postgres -c "CREATE DATABASE myplacements_e2e"
+cd frontend && npm run e2e
+```
+
+Playwright starts both servers itself and reseeds the database before the run,
+so there is nothing to have running first except Postgres. 35 specs, ~30s.
+
+These exist for what the other tiers cannot reach. Everything below the browser
+already has 1187 backend and 292 component tests, so an E2E spec that re-checks
+a filter or a validation message is only a slower copy of one that exists. What
+is genuinely untestable elsewhere:
+
+| Spec | The seam |
+|---|---|
+| `auth` | The subdomain deciding the tenant. Vite rewrites Host in dev, so the tenant travels in an X-Tenant header the frontend derives from the address bar - if that broke, every API test would still pass. |
+| `tenancy` | Two portals in one browser, and a session that does not follow you to another college's address. |
+| `portal` | Students hold real accounts on the same door; the wall is a role check and a redirect. |
+| `console` | `admin.*` serves the same bundle as every tenant - which app you get is decided by the address bar alone. |
+| `reports` | A workbook built in memory, streamed as a blob and turned into a file. Other tiers see only the first third; this checks the bytes start `PK`. |
+
+`backend/seed_e2e.py` drops every table, so it refuses any database whose name
+does not end in `_e2e`. The dev database usually lives on the same container.
+
+### Locator notes
+
+Four things in this app defeat the obvious locator, each having cost a run:
+
+* `Field` appends an sr-only " (required)", so a label is "Password (required)" -
+  exact matching misses it and loose matching also catches the "Show password"
+  toggle. Anchor instead: `/^Password/`.
+* `getByText` is a substring match, so "Unallocated Corp" matches "Allocated
+  Corp". Company names need `{ exact: true }`.
+* The sidebar renders more than one copy of each nav link and hides labels when
+  collapsed. Navigate by URL.
+* The confirm dialog is `role="alertdialog"`, not `dialog`.
+
 ## Conventions
 
 - `describe` names the unit; the `it` reads as a sentence about behaviour, not

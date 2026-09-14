@@ -44,3 +44,8 @@ htmlcov/
 run_commands.txt
 
 company_details/
+# Playwright
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/blob-report/
+/frontend/.playwright/
