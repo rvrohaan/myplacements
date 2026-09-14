@@ -197,10 +197,22 @@ contact's own date, so counting both would tell an officer they owe twice what
 they do) and `workload` (share and spread, and deliberately no comparison
 against `target_companies`) round it out.
 
-On the frontend, `src/routes/guards.test.tsx` covers the route guards,
-`src/store/authStore.test.ts` the session plus both axios interceptors, and
-`src/pages/auth/Login.test.tsx` the front door - which is three doors, since the
-same page serves a college subdomain, the platform console and the apex. The
+On the frontend, `src/routes/guards.test.tsx` covers the route guards and
+`src/store/authStore.test.ts` the session plus both axios interceptors.
+
+Page tests, one file each, aimed at the behaviour that page exists for:
+
+| Page | What it pins |
+|---|---|
+| `Login` | Three doors behind one URL: college subdomain, console, apex. |
+| `Students` | Server-side paging and the stale-response guard. |
+| `HRContacts` | The two readings of a relationship stay side by side, never averaged; no history reads as "No history", not zero. |
+| `Officers` | Allocation is the key to officer access, so removal asks first and says what is lost. |
+| `Opportunities` | Scan-once, and telling "nothing posted" from "nothing ran". |
+| `DriveDetail` | Optimistic status changes, and the rollback when the server refuses. |
+
+`pages.smoke.test.tsx` still covers all six against an API that answers with
+nothing - the empty-college case the per-page files do not repeat. The
 guards were lifted out of `App.tsx` into `src/routes/guards.tsx` so they can be
 tested without importing all 40 page modules; `ResetPasswordRoute` stayed
 behind, since it renders a page rather than gating one.
