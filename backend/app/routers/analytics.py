@@ -8,7 +8,7 @@ from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
+from app.core.deps import get_current_staff, get_current_user, require_roles
 from app.core.timeutil import overdue_before
 from app.models.communication import Communication
 from app.models.company import Company, CompanyStatus
@@ -19,7 +19,7 @@ from app.models.student import PlacementStatus, RiskCategory, Student
 from app.models.training import StudentTraining
 from app.models.user import User, UserRole
 
-router = APIRouter(prefix="/analytics", tags=["analytics"])
+router = APIRouter(prefix="/analytics", tags=["analytics"], dependencies=[Depends(get_current_staff)])
 
 # Leadership sees the whole college plus every officer's progress; a placement
 # officer only ever sees the slice of the college allocated to them.

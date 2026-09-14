@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
+from app.core.deps import get_current_staff, get_current_user, require_roles
 from app.models.student import Student
 from app.models.training import StudentTraining, TrainingModule
 from app.models.user import User, UserRole
@@ -25,7 +25,7 @@ from app.services import skills
 from app.services.excel_io import XLSX_MEDIA_TYPE
 from app.services.training_roster import TEMPLATE_HEADERS, extract_attendance
 
-router = APIRouter(prefix="/training", tags=["training"])
+router = APIRouter(prefix="/training", tags=["training"], dependencies=[Depends(get_current_staff)])
 
 MANAGE_ROLES = (
     UserRole.SUPER_ADMIN,

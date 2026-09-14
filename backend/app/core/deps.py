@@ -42,6 +42,26 @@ def get_current_user(
     return user
 
 
+def get_current_staff(current_user: User = Depends(get_current_user)) -> User:
+    """A signed-in member of staff.
+
+    Students hold real accounts on their college's subdomain, so a student token
+    passes get_current_user exactly like an officer's. Authentication alone is
+    therefore not a gate on the staff app: before this existed, a student could
+    read /api/students (every classmate's CGPA, backlogs and risk band),
+    /api/hr-contacts (the college's whole contact list) and the Excel exports of
+    both.
+
+    Attached at the router level on every staff router, so a new endpoint is
+    covered by default rather than by remembering. The student portal lives
+    under /api/portal and is unaffected; so are /api/auth and /api/notifications,
+    which students legitimately use.
+    """
+    if current_user.role == UserRole.STUDENT:
+        raise HTTPException(status_code=403, detail="Staff account required")
+    return current_user
+
+
 def require_roles(*roles: UserRole):
     def checker(current_user: User = Depends(get_current_user)):
         if current_user.role not in roles:

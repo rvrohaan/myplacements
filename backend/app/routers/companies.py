@@ -9,7 +9,7 @@ import logging
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
+from app.core.deps import get_current_staff, get_current_user, require_roles
 from app.models.communication import Communication
 from app.models.company import Company, CompanyRole, CompanyStatus, HRContact
 from app.models.officer import CompanyAssignment, PlacementOfficer
@@ -48,7 +48,7 @@ from app.services.ai_service import (
 from app.services import notify
 from app.services.excel_io import XLSX_MEDIA_TYPE, Column, build_workbook, parse_rows
 
-router = APIRouter(prefix="/companies", tags=["companies"])
+router = APIRouter(prefix="/companies", tags=["companies"], dependencies=[Depends(get_current_staff)])
 
 logger = logging.getLogger(__name__)
 
@@ -458,19 +458,25 @@ def update_company(
 
 
 @router.delete("/{company_id}", status_code=204)
-def delete_company(company_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+def delete_company(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Scoped like every other single-company route: an unscoped lookup here let
+    # any signed-in user of any college delete any company on the platform.
+    company = _accessible_company(company_id, db, current_user)
     db.delete(company)
     db.commit()
 
 
 @router.post("/{company_id}/generate-profile", response_model=CompanyOut)
-async def generate_ai_profile(company_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+async def generate_ai_profile(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    company = _accessible_company(company_id, db, current_user)
     profile = await generate_company_profile(company)
     company.ai_profile = profile
     db.commit()
@@ -565,9 +571,7 @@ async def draft_hr_contact_email(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+    company = _accessible_company(company_id, db, current_user)
     contact = (
         db.query(HRContact)
         .filter(HRContact.id == hr_id, HRContact.company_id == company_id)
@@ -584,11 +588,9 @@ async def company_interview_questions(
     company_id: int,
     payload: InterviewQuestionsRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+    company = _accessible_company(company_id, db, current_user)
     questions = await generate_interview_questions(payload.job_role, company.name, company.domain or "N/A")
     return {"questions": questions}
 
@@ -598,11 +600,9 @@ async def company_exam_questions(
     company_id: int,
     payload: ExamQuestionsRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+    company = _accessible_company(company_id, db, current_user)
     questions = await generate_exam_questions(payload.job_role, company.name, company.domain or "N/A")
     return {"questions": questions}
 

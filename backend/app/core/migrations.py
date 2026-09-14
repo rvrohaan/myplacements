@@ -296,6 +296,17 @@ _ENUM_VALUES = [
 
 
 def run_migrations(engine: Engine) -> None:
+    """Apply the statements above. No-op on any dialect but Postgres.
+
+    Every statement here is Postgres syntax (``ADD COLUMN IF NOT EXISTS``,
+    ``ALTER TYPE ... ADD VALUE``), and they exist only to patch databases that
+    predate a column. A database built fresh by ``create_all`` - which is what
+    the test suite uses, on SQLite - already has every column, so there is
+    nothing to bridge and running these would only fail on the syntax.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+
     with engine.begin() as conn:
         for statement in _MIGRATIONS:
             conn.execute(text(statement))

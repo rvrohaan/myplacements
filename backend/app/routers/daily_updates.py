@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.links import tenant_url
-from app.core.deps import get_current_user, require_roles
+from app.core.deps import get_current_staff, get_current_user, require_roles
 from app.core.tenant import get_optional_college
 from app.core.timeutil import (
     DEFAULT_CUTOFF,
@@ -57,7 +57,12 @@ from app.services.daily_metrics import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/daily-updates", tags=["daily-updates"])
+router = APIRouter(prefix="/daily-updates", tags=["daily-updates"], dependencies=[Depends(get_current_staff)])
+
+# The scheduler tick is deliberately tokenless - it is called by cron, not by
+# a signed-in person, and authenticates with the CRON_TOKEN shared secret
+# inside the handler. It therefore cannot sit on the staff-gated router
+cron_router = APIRouter(prefix="/daily-updates", tags=["daily-updates"])
 
 # Leadership reads every update in the college and may acknowledge or correct any
 # of them. Same membership as the tuples in analytics.py and communications.py.
@@ -603,7 +608,7 @@ def _notify_followups(db: Session, college: College, day: date) -> int:
     return told
 
 
-@router.post("/cron/run")
+@cron_router.post("/cron/run")
 def cron_run(request: Request, db: Session = Depends(get_db)):
     """Unattended scheduler tick. Call it hourly; it decides what is due.
 

@@ -20,5 +20,9 @@
     }
   },
   "include": ["src"],
+  // Test files are typechecked by `npm run typecheck:test` (tsconfig.test.json),
+  // not by the production build - a type error in a test should fail the test
+  // job, not block a release.
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

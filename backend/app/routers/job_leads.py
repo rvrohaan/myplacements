@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import require_roles
+from app.core.deps import get_current_staff, require_roles
 from app.core.tenant import get_optional_college
 from app.core.timeutil import local_now
 from app.models.college import College
@@ -55,7 +55,12 @@ from app.services.ai_service import ScanUnavailable
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/job-leads", tags=["job-leads"])
+router = APIRouter(prefix="/job-leads", tags=["job-leads"], dependencies=[Depends(get_current_staff)])
+
+# The scheduler tick is deliberately tokenless - it is called by cron, not by
+# a signed-in person, and authenticates with the CRON_TOKEN shared secret
+# inside the handler. It therefore cannot sit on the staff-gated router
+cron_router = APIRouter(prefix="/job-leads", tags=["job-leads"])
 
 # Everyone on the placement side can read the radar - an officer knowing that a
 # company opened fresher hiring this morning is the point. Acting on an opening
@@ -468,7 +473,7 @@ def scan_now(
     }
 
 
-@router.post("/cron/run")
+@cron_router.post("/cron/run")
 def cron_run(
     request: Request,
     background: BackgroundTasks,

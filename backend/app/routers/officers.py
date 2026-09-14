@@ -5,7 +5,7 @@ from sqlalchemy import and_, exists, func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
+from app.core.deps import get_current_staff, get_current_user, require_roles
 from app.models.company import Company, CompanyStatus, HRContact
 from app.models.officer import CompanyAssignment, PlacementOfficer
 from app.models.user import User, UserRole
@@ -24,7 +24,7 @@ from app.schemas.officer import (
 from app.services import notify
 from app.services.allocation import NO_MOU, propose_allocations
 
-router = APIRouter(prefix="/officers", tags=["officers"])
+router = APIRouter(prefix="/officers", tags=["officers"], dependencies=[Depends(get_current_staff)])
 
 # Roles allowed to allocate work to officers.
 MANAGE_ROLES = (UserRole.SUPER_ADMIN, UserRole.PRINCIPAL, UserRole.PRO_CHANCELLOR, UserRole.DEPUTY_PRO_CHANCELLOR)

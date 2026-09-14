@@ -20,7 +20,7 @@ from sqlalchemy import String, case, cast, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
-from app.core.deps import require_roles
+from app.core.deps import get_current_staff, require_roles
 from app.core.roles import STAFF_ROLES
 from app.models.company import Company
 from app.models.offer import Offer, OfferStatus
@@ -37,7 +37,7 @@ from app.schemas.offer import (
 )
 from app.services.placement import LIVE_STATUSES, sync_student_placement
 
-router = APIRouter(prefix="/offers", tags=["offers"])
+router = APIRouter(prefix="/offers", tags=["offers"], dependencies=[Depends(get_current_staff)])
 
 # Students never reach the staff app; everything here is staff-only.
 StaffUser = Depends(require_roles(*STAFF_ROLES))

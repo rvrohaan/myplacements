@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_staff, get_current_user
 from app.core.timeutil import overdue_before
 from app.models.communication import Communication
 from app.models.company import Company, HRContact
@@ -27,7 +27,7 @@ from app.models.user import User, UserRole
 from app.schemas.company import HRContactDirectoryOut, HRContactOut
 from app.services.hr_engagement import score_many
 
-router = APIRouter(prefix="/hr-contacts", tags=["hr-contacts"])
+router = APIRouter(prefix="/hr-contacts", tags=["hr-contacts"], dependencies=[Depends(get_current_staff)])
 
 # Follow-up buckets the directory can filter to. "due" is the working set -
 # everything already owed plus the next week - because an officer planning their

@@ -5,14 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import require_roles
+from app.core.deps import get_current_staff, require_roles
 from app.core.security import get_password_hash
 from app.models.invite import InvitePurpose, UserInvite
 from app.models.user import User, UserRole
 from app.schemas.user import InviteOut, UserCreate, UserCreated, UserOut, UserUpdate
 from app.services.invites import issue_and_deliver
 
-router = APIRouter(prefix="/users", tags=["users"])
+router = APIRouter(prefix="/users", tags=["users"], dependencies=[Depends(get_current_staff)])
 
 # Roles allowed to manage user accounts
 ADMIN_ROLES = (UserRole.SUPER_ADMIN, UserRole.PRINCIPAL, UserRole.PRO_CHANCELLOR, UserRole.DEPUTY_PRO_CHANCELLOR)

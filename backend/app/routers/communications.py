@@ -6,7 +6,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_staff, get_current_user
 from app.models.communication import Communication
 from app.models.company import Company, HRContact
 from app.models.officer import CompanyAssignment, PlacementOfficer
@@ -17,7 +17,7 @@ from app.schemas.communication import (
     CommunicationUpdate,
 )
 
-router = APIRouter(prefix="/communications", tags=["communications"])
+router = APIRouter(prefix="/communications", tags=["communications"], dependencies=[Depends(get_current_staff)])
 
 # Leadership: sees every log in the college and may correct or remove any of them.
 HEAD_ROLES = (

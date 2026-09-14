@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import require_roles
+from app.core.deps import get_current_staff, require_roles
 from app.core.roles import LEADERSHIP_ROLES
 from app.core.timeutil import local_today
 from app.models.college import College
@@ -29,7 +29,7 @@ from app.models.user import User
 from app.services import insights, monthly
 from app.services.ai_service import NarrationUnavailable, INSIGHT_MODEL, narrate_dashboard
 
-router = APIRouter(prefix="/insights", tags=["insights"])
+router = APIRouter(prefix="/insights", tags=["insights"], dependencies=[Depends(get_current_staff)])
 
 Leadership = Depends(require_roles(*LEADERSHIP_ROLES))
 

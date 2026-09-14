@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import require_roles
+from app.core.deps import get_current_staff, require_roles
 from app.core.roles import LEADERSHIP_ROLES
 from app.models.student import Student
 from app.models.user import User
@@ -26,7 +26,7 @@ from app.services.report_builder import XLSX_MEDIA_TYPE, build_report_workbook
 from app.services import monthly
 from app.services.report_defs import BY_ID, REPORTS
 
-router = APIRouter(prefix="/reports", tags=["reports"])
+router = APIRouter(prefix="/reports", tags=["reports"], dependencies=[Depends(get_current_staff)])
 
 Leadership = Depends(require_roles(*LEADERSHIP_ROLES))
 

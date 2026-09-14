@@ -7,7 +7,7 @@ from sqlalchemy import String, case, cast, func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_roles
+from app.core.deps import get_current_staff, get_current_user, require_roles
 from app.core.security import get_password_hash
 from app.models.offer import Offer, OfferStatus
 from app.models.student import PlacementStatus, RiskCategory, Student
@@ -27,7 +27,7 @@ from app.services import skills
 from app.services.placement import LIVE_STATUSES
 from app.services.student_scoring import assess
 
-router = APIRouter(prefix="/students", tags=["students"])
+router = APIRouter(prefix="/students", tags=["students"], dependencies=[Depends(get_current_staff)])
 
 
 def _search_filter(search: str):

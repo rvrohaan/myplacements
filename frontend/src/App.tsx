@@ -39,11 +39,19 @@ import type { UserRole } from '@/types'
 const ADMIN_ROLES: UserRole[] = ['super_admin', 'principal', 'pro_chancellor', 'deputy_pro_chancellor']
 
 // Where "home" is depends on the host: the platform console manages colleges.
-const HOME = isAdminHost() ? '/colleges' : '/dashboard'
+//
+// Read at render time, not at module scope: a module-level constant is frozen
+// at import, which makes the host untestable (and would survive a soft
+// navigation between hosts). Both calls are trivial string work.
+function home(): string {
+  return isAdminHost() ? '/colleges' : '/dashboard'
+}
 
 // The apex domain (myplacements.in, no subdomain) carries no tenant, so it
 // serves the public marketing site instead of the staff app.
-const IS_APEX = getSubdomain() === null
+function isApex(): boolean {
+  return getSubdomain() === null
+}
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => !!s.token)
@@ -62,7 +70,7 @@ function StudentRoute({ children }: { children: React.ReactNode }) {
   const role = useAuthStore((s) => s.user?.role)
   if (!isAuthenticated) return <Navigate to="/login" replace />
   if (mustResetPassword) return <Navigate to="/reset-password" replace />
-  if (role !== 'student') return <Navigate to={HOME} replace />
+  if (role !== 'student') return <Navigate to={home()} replace />
   return <>{children}</>
 }
 
@@ -73,7 +81,7 @@ function ResetPasswordRoute() {
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user)
-  return user && ADMIN_ROLES.includes(user.role) ? <>{children}</> : <Navigate to={HOME} replace />
+  return user && ADMIN_ROLES.includes(user.role) ? <>{children}</> : <Navigate to={home()} replace />
 }
 
 // College-data pages don't exist on the platform console — send them to People.
@@ -83,7 +91,7 @@ function CollegeRoute({ children }: { children: React.ReactNode }) {
 
 // Console-only pages (e.g. Colleges) exist only on the platform console.
 function ConsoleRoute({ children }: { children: React.ReactNode }) {
-  return isAdminHost() ? <>{children}</> : <Navigate to={HOME} replace />
+  return isAdminHost() ? <>{children}</> : <Navigate to={home()} replace />
 }
 
 export default function App() {
@@ -112,8 +120,8 @@ export default function App() {
           <Route path="drives" element={<StudentDrives />} />
         </Route>
         {/* The staff app needs a tenant subdomain; the apex only serves marketing. */}
-        {IS_APEX && <Route path="/" element={<Landing />} />}
-        {!IS_APEX && (
+        {isApex() && <Route path="/" element={<Landing />} />}
+        {!isApex() && (
         <Route
           path="/"
           element={
@@ -122,7 +130,7 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route index element={<Navigate to={HOME} replace />} />
+          <Route index element={<Navigate to={home()} replace />} />
           {/* Not wrapped in CollegeRoute: a platform admin has their own
               notifications on the console host too. */}
           <Route path="notifications" element={<Notifications />} />

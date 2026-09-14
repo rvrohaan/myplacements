@@ -34,6 +34,12 @@ Thumbs.db
 *.sqlite3
 pgdata/
 
+# Test artifacts
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+
 # Local notes
 run_commands.txt
 

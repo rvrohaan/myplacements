@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_staff, get_current_user
 from app.core.security import get_password_hash
 
 from app.models.company import Company
@@ -40,7 +40,7 @@ from app.services.round_roster import TEMPLATE_HEADERS, extract_roster
 from app.services import notify
 from app.services.student_scoring import assess
 
-router = APIRouter(prefix="/drives", tags=["drives"])
+router = APIRouter(prefix="/drives", tags=["drives"], dependencies=[Depends(get_current_staff)])
 
 # A drive can't have an unbounded number of interview rounds; cap it defensively
 # so a bad value can't spawn thousands of rows.

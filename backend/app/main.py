@@ -1,5 +1,6 @@
 import os
 import re
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,10 +33,27 @@ from app.routers import (
 
 import app.models  # ensure all models are registered before create_all
 
-Base.metadata.create_all(bind=engine)
-run_migrations(engine)  # add columns to pre-existing tables
 
-app = FastAPI(title="MyPlacement.AI", version="1.0.0", docs_url="/api/docs", redoc_url="/api/redoc")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Bring the schema up to date once, on startup.
+
+    This deliberately does not run at import time: importing ``app.main`` must
+    not need a reachable database, or the test suite could not build a client
+    without one. uvicorn runs this on boot, which is the only place it matters.
+    """
+    Base.metadata.create_all(bind=engine)
+    run_migrations(engine)  # add columns to pre-existing tables
+    yield
+
+
+app = FastAPI(
+    title="MyPlacement.AI",
+    version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    lifespan=lifespan,
+)
 
 # Allow the apex domain and any college subdomain (in prod), plus localhost and
 # *.localhost subdomains (in dev). Regex is required because the set of tenant
@@ -66,6 +84,9 @@ app.include_router(communications.router, prefix="/api")
 app.include_router(hr_contacts.router, prefix="/api")
 app.include_router(daily_updates.router, prefix="/api")
 app.include_router(job_leads.router, prefix="/api")
+# The tokenless scheduler ticks, kept off the staff-gated routers above.
+app.include_router(daily_updates.cron_router, prefix="/api")
+app.include_router(job_leads.cron_router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(training.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
