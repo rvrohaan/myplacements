@@ -192,8 +192,15 @@ only gain, a source owns only its own rows, training rows are derived) and
 them; opting out is a decision about the student, not a conclusion about their
 offers).
 
-On the frontend, `src/routes/guards.test.tsx` covers the route guards and
-`src/store/authStore.test.ts` the session plus both axios interceptors. The
+`followups` (the obligation, not the row: logging a communication syncs the
+contact's own date, so counting both would tell an officer they owe twice what
+they do) and `workload` (share and spread, and deliberately no comparison
+against `target_companies`) round it out.
+
+On the frontend, `src/routes/guards.test.tsx` covers the route guards,
+`src/store/authStore.test.ts` the session plus both axios interceptors, and
+`src/pages/auth/Login.test.tsx` the front door - which is three doors, since the
+same page serves a college subdomain, the platform console and the apex. The
 guards were lifted out of `App.tsx` into `src/routes/guards.tsx` so they can be
 tested without importing all 40 page modules; `ResetPasswordRoute` stayed
 behind, since it renders a page rather than gating one.

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_password_hash
 from app.models.college import College
 from app.models.company import Company, CompanyStatus, HRContact
+from app.models.communication import Communication, CommunicationType
 from app.models.drive import Drive
 from app.models.training import StudentTraining, TrainingModule
 from app.models.officer import CompanyAssignment, PlacementOfficer
@@ -253,3 +254,30 @@ def enrol(
     db.add(record)
     db.flush()
     return record
+
+
+def log_communication(
+    db: Session,
+    *,
+    college: College,
+    company: Company,
+    contact: HRContact | None = None,
+    logged_by: User | None = None,
+    officer: PlacementOfficer | None = None,
+    **kw,
+) -> Communication:
+    """One outreach log. `next_followup_date` is what makes it an obligation."""
+    comm = Communication(
+        college_id=college.id,
+        company_id=company.id,
+        hr_contact_id=contact.id if contact else None,
+        logged_by_id=logged_by.id if logged_by else None,
+        officer_id=officer.id if officer else None,
+        comm_type=kw.pop("comm_type", CommunicationType.EMAIL),
+        subject=kw.pop("subject", "Campus drive enquiry"),
+        response_received=kw.pop("response_received", None),
+        **kw,
+    )
+    db.add(comm)
+    db.flush()
+    return comm
