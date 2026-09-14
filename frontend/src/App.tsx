@@ -33,65 +33,21 @@ import SkillReport from '@/pages/portal/SkillReport'
 import ResumeReview from '@/pages/portal/ResumeReview'
 import StudentDrives from '@/pages/portal/StudentDrives'
 import Landing from '@/pages/marketing/Landing'
-import { getSubdomain, isAdminHost } from '@/lib/tenant'
-import type { UserRole } from '@/types'
+import {
+  AdminRoute,
+  CollegeRoute,
+  ConsoleRoute,
+  ProtectedRoute,
+  StudentRoute,
+  home,
+  isApex,
+} from '@/routes/guards'
 
-const ADMIN_ROLES: UserRole[] = ['super_admin', 'principal', 'pro_chancellor', 'deputy_pro_chancellor']
-
-// Where "home" is depends on the host: the platform console manages colleges.
-//
-// Read at render time, not at module scope: a module-level constant is frozen
-// at import, which makes the host untestable (and would survive a soft
-// navigation between hosts). Both calls are trivial string work.
-function home(): string {
-  return isAdminHost() ? '/colleges' : '/dashboard'
-}
-
-// The apex domain (myplacements.in, no subdomain) carries no tenant, so it
-// serves the public marketing site instead of the staff app.
-function isApex(): boolean {
-  return getSubdomain() === null
-}
-
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const isAuthenticated = useAuthStore((s) => !!s.token)
-  const mustResetPassword = useAuthStore((s) => !!s.user?.must_reset_password)
-  const role = useAuthStore((s) => s.user?.role)
-  if (!isAuthenticated) return <Navigate to="/login" replace />
-  if (mustResetPassword) return <Navigate to="/reset-password" replace />
-  // Students live in the portal; keep them out of the staff app.
-  if (role === 'student') return <Navigate to="/portal" replace />
-  return <>{children}</>
-}
-
-function StudentRoute({ children }: { children: React.ReactNode }) {
-  const isAuthenticated = useAuthStore((s) => !!s.token)
-  const mustResetPassword = useAuthStore((s) => !!s.user?.must_reset_password)
-  const role = useAuthStore((s) => s.user?.role)
-  if (!isAuthenticated) return <Navigate to="/login" replace />
-  if (mustResetPassword) return <Navigate to="/reset-password" replace />
-  if (role !== 'student') return <Navigate to={home()} replace />
-  return <>{children}</>
-}
-
+// Kept here rather than in guards.tsx: it renders a page, so it is a route
+// element rather than a reusable guard.
 function ResetPasswordRoute() {
   const isAuthenticated = useAuthStore((s) => !!s.token)
   return isAuthenticated ? <ResetPassword /> : <Navigate to="/login" replace />
-}
-
-function AdminRoute({ children }: { children: React.ReactNode }) {
-  const user = useAuthStore((s) => s.user)
-  return user && ADMIN_ROLES.includes(user.role) ? <>{children}</> : <Navigate to={home()} replace />
-}
-
-// College-data pages don't exist on the platform console — send them to People.
-function CollegeRoute({ children }: { children: React.ReactNode }) {
-  return isAdminHost() ? <Navigate to="/people" replace /> : <>{children}</>
-}
-
-// Console-only pages (e.g. Colleges) exist only on the platform console.
-function ConsoleRoute({ children }: { children: React.ReactNode }) {
-  return isAdminHost() ? <>{children}</> : <Navigate to={home()} replace />
 }
 
 export default function App() {

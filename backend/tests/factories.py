@@ -14,6 +14,7 @@ from app.core.security import get_password_hash
 from app.models.college import College
 from app.models.company import Company, CompanyStatus, HRContact
 from app.models.drive import Drive
+from app.models.training import StudentTraining, TrainingModule
 from app.models.officer import CompanyAssignment, PlacementOfficer
 from app.models.student import Student
 from app.models.user import User, UserRole
@@ -218,3 +219,37 @@ def make_drive(db: Session, *, college: College, company: Company | None = None,
     db.add(drive)
     db.flush()
     return drive
+
+
+def make_module(db: Session, *, college: College, skills: str | None = None, **kw) -> TrainingModule:
+    """A training module. `skills` is what completing it evidences - without it
+    a completion says somebody attended something and nothing more."""
+    n = _next()
+    module = TrainingModule(
+        college_id=college.id,
+        name=kw.pop("name", f"Module {n}"),
+        category=kw.pop("category", "Technical"),
+        skills=skills,
+        **kw,
+    )
+    db.add(module)
+    db.flush()
+    return module
+
+
+def enrol(
+    db: Session, *, student: Student, module: TrainingModule, status: str = "enrolled", **kw
+) -> StudentTraining:
+    """Put a student on a module. Only status="completed" counts as evidence."""
+    from datetime import datetime
+
+    record = StudentTraining(
+        student_id=student.id,
+        module_id=module.id,
+        status=status,
+        completed_at=kw.pop("completed_at", datetime.utcnow() if status == "completed" else None),
+        **kw,
+    )
+    db.add(record)
+    db.flush()
+    return record

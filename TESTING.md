@@ -183,6 +183,21 @@ fails if they come back:
    takes a correct password to reach, and login semantics are a product
    decision. See `test_the_disabled_check_currently_runs_before_the_host_check`.
 
+## The service tier
+
+`backend/tests/services/` covers the services that need a session, using the
+`db` fixture and the factories. Currently `skills` (provenance: the cache can
+only gain, a source owns only its own rows, training rows are derived) and
+`placement` (a student is placed while they hold a live offer, at the best of
+them; opting out is a decision about the student, not a conclusion about their
+offers).
+
+On the frontend, `src/routes/guards.test.tsx` covers the route guards and
+`src/store/authStore.test.ts` the session plus both axios interceptors. The
+guards were lifted out of `App.tsx` into `src/routes/guards.tsx` so they can be
+tested without importing all 40 page modules; `ResetPasswordRoute` stayed
+behind, since it renders a page rather than gating one.
+
 ## Conventions
 
 - `describe` names the unit; the `it` reads as a sentence about behaviour, not
